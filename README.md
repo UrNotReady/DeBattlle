@@ -1,5 +1,7 @@
 # DeBattle — prototype
 
+> **Jeu parodique.** DeBattle n'est ni lié aux partis cités (LFI, Renaissance, RN), ni soutenu par eux ; tous les autres noms sont inventés. Aucun logo de parti, aucun responsable politique réel, aucun slogan prêté à un vrai parti. La mention figure aussi sur l'accueil du jeu.
+
 Jeu de conquête de territoire pour navigateur, inspiré de Paper.io (anciennement « Politique Papers »), sur le thème (très) libre d'une campagne électorale. HTML, CSS et JavaScript natifs, sans serveur.
 
 Tu pars d'un petit territoire. Tu en sors en traçant une ligne, tu reviens chez toi, et tout ce que la ligne entoure devient à toi. Tant que tu es dehors, ta ligne est vulnérable : si un adversaire la touche, tu perds. Chaque case est une voix : le premier camp à posséder 51 % de l'arène l'emporte.

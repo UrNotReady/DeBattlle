@@ -1628,3 +1628,12 @@ body {
 .team-buttons .is-full {
   opacity: 0.45;
 }
+
+/* Mention parodique, discrète mais toujours lisible. */
+.disclaimer {
+  flex-basis: 100%;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
