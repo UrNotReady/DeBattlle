@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#2a86bf">
+  <title>DeBattle</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&amp;display=swap">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="arena" tabindex="-1" aria-label="Arène de jeu"></canvas>
+
+  <div id="hud" class="hud" hidden>
+    <div class="hud-self">
+      <div id="hud-share" class="hud-share">0,00 %</div>
+      <div class="hud-card">
+        <dl class="hud-stats">
+          <div><dt>Score</dt><dd id="hud-score">0</dd></div>
+          <div><dt>Record</dt><dd id="hud-best">—</dd></div>
+          <div><dt class="skull-label"><span id="hud-skull" class="skull"></span><span class="visually-hidden">Éliminations</span></dt><dd id="hud-kills">0</dd></div>
+        </dl>
+        <p id="hud-region" class="hud-region" hidden></p>
+      </div>
+      <p class="hud-badges">
+        <button id="btn-pause" class="hud-pause" type="button" aria-label="Pause" title="Pause (Échap)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10M15 7v10"/></svg>
+        </button>
+        <span id="hud-round" class="badge" hidden></span>
+        <span id="hud-safe" class="badge badge-test" hidden>Traînée protégée</span>
+      </p>
+    </div>
+    <ol id="ranking" class="ranking" aria-label="Classement"></ol>
+  </div>
+
+  <div id="abilities" class="abilities" hidden>
+    <div id="charges" class="charges" role="img" aria-label="Charges"></div>
+    <div id="ability-buttons" class="ability-buttons"></div>
+  </div>
+
+  <canvas id="minimap" class="minimap" aria-label="Mini-carte de l'arène" hidden></canvas>
+  <button id="compass" class="compass" type="button" aria-label="Remettre la caméra face au nord" title="Remettre la caméra face au nord" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path class="compass-north" d="M12 3l3.2 9h-6.4z"/><path class="compass-south" d="M12 21l-3.2-9h6.4z"/></svg>
+  </button>
+
+  <p id="announcement" class="announcement" role="status" hidden></p>
+
+  <p id="start-hint" class="start-hint" hidden></p>
+
+  <!-- Accueil -->
+  <section id="screen-home" class="screen">
+    <div class="screen-body home-body">
+      <h1 class="logo" aria-label="DeBattle">
+        <span class="logo-plate" aria-hidden="true">
+          <span class="logo-word logo-de">De</span>
+          <svg class="logo-burst" viewBox="0 0 24 30">
+            <path class="burst-ink" d="M5 23l9-4M4 15h11M5 7l9 3"/>
+            <path class="burst-light" d="M5 23l9-4M4 15h11M5 7l9 3"/>
+          </svg>
+          <span class="logo-word logo-battle">
+            <svg class="logo-crown" viewBox="0 0 60 42">
+              <path d="M8 31 4 9l14 11L30 4l12 16 14-11-4 22z"/>
+              <rect x="8" y="31" width="44" height="7" rx="2"/>
+            </svg>Battle</span>
+        </span>
+      </h1>
+      <p class="tagline">Trace, entoure, capture. Chaque case est une voix, et chaque voix compte.</p>
+
+      <article class="panel mode-card">
+        <header class="mode-head">
+          <h2>Crée ton parti</h2>
+          <span class="tag">Solo · 5 niveaux</span>
+        </header>
+        <p>Pars de rien et remporte 51 % de ton quartier, puis de ta ville, de ton département, de ta région… jusqu'à l'élection finale. Chaque territoire est découpé en secteurs, quartiers, communes ou départements : tiens-en plus de 70 % et le reste est à toi. Choisis ton nom de candidat ; arrivé en ville, fonde ton parti.</p>
+        <div class="difficulty" role="radiogroup" aria-label="Difficulté">
+          <button type="button" role="radio" data-difficulty="normal" aria-checked="true">Normal</button>
+          <button type="button" role="radio" data-difficulty="chaud" aria-checked="false">Chaud</button>
+          <button type="button" role="radio" data-difficulty="hardcore" aria-checked="false">Hardcore</button>
+        </div>
+        <p id="difficulty-note" class="difficulty-note"></p>
+        <ol id="campaign-steps" class="steps" aria-label="Progression de la campagne"></ol>
+        <p id="campaign-status" class="mode-status" hidden></p>
+        <div class="actions">
+          <button id="btn-campaign" class="btn btn-go" type="button">Lancer ma campagne</button>
+          <button id="btn-campaign-new" class="btn btn-quiet" type="button" hidden>Nouvelle campagne</button>
+        </div>
+      </article>
+
+      <article class="panel mode-card">
+        <header class="mode-head">
+          <h2>Équipes</h2>
+          <span class="tag">3 camps · 2 tours</span>
+        </header>
+        <p>Rejoins un camp avec deux alliés pilotés par l'IA : territoire commun, et la ligne d'un allié ne te fait rien. Premier à 51 % : élu d'office. Éliminé alors que ton camp est en tête avec au moins un tiers du pays ? Direction le second tour, face au deuxième.</p>
+        <div id="team-buttons" class="team-buttons"></div>
+      </article>
+
+      <article class="panel mode-card">
+        <header class="mode-head">
+          <h2>En ligne</h2>
+          <span class="tag">Équipes · 6 humains</span>
+        </header>
+        <p>Joue en équipes avec tes copains, à côté ou à l'autre bout du pays. Ton appareil héberge la partie : donne le code ou envoie le lien, ils rejoignent depuis leur navigateur. Les places libres sont tenues par des IA.</p>
+        <p id="online-notice" class="mode-status" role="status" hidden></p>
+        <div class="actions">
+          <button id="btn-host" class="btn btn-go" type="button">Créer une partie</button>
+          <button id="btn-join" class="btn btn-sky" type="button">Rejoindre</button>
+        </div>
+      </article>
+
+      <div class="home-footer">
+        <div class="settings-row">
+          <button id="btn-settings" class="btn btn-quiet btn-small" type="button">Options</button>
+          <span id="settings-summary" class="settings-summary"></span>
+        </div>
+        <details class="controls-help">
+          <summary>Commandes</summary>
+          <dl class="controls">
+            <div><dt>Clavier</dt><dd>Flèches ou ZQSD, diagonales comprises. Espace : boost, R : bombe. E : maintiens pour viser le dash, lâche pour le lancer. F ou double clic : s'arrêter (contrôle auto). Échap : pause. Molette pour zoomer, clic droit glissé pour tourner la caméra.</dd></div>
+            <div><dt>Tactile</dt><dd>Glisse le pouce : ton cube prend la direction. Tape deux fois : il s'arrête (contrôle auto). Dash : appuie sur son bouton, glisse pour viser, lâche. Deux doigts : pince pour zoomer, glisse vers le haut ou le bas pour incliner la vue, tourne-les pour faire pivoter la caméra.</dd></div>
+          </dl>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- Choix d'un nom : candidat, puis parti -->
+  <section id="screen-pick" class="screen" hidden>
+    <div class="screen-body">
+      <article class="panel picker">
+        <h2 class="ribbon"><span id="pick-title">Choisis ton candidat</span></h2>
+        <p id="pick-text" class="picker-text"></p>
+        <div id="pick-options" class="pick-options"></div>
+        <form id="pick-custom" class="pick-custom">
+          <label for="pick-input" class="visually-hidden">Ou écris le tien</label>
+          <input id="pick-input" type="text" maxlength="28" autocomplete="off" spellcheck="false" placeholder="Ou écris le tien">
+          <button class="btn btn-go btn-small" type="submit">OK</button>
+        </form>
+        <div class="actions actions-center">
+          <button id="btn-pick-reroll" class="btn btn-sky" type="button">Autres idées</button>
+          <button id="btn-pick-back" class="btn btn-quiet" type="button">Retour</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Pause : reprendre, changer de nom, de couleur, de difficulté ou de mode -->
+  <section id="screen-pause" class="screen" hidden>
+    <div class="screen-body">
+      <article class="panel pause-panel">
+        <h2 class="ribbon"><span>Pause</span></h2>
+        <p id="pause-where" class="pause-where"></p>
+        <button id="btn-resume" class="btn btn-go" type="button">Reprendre</button>
+
+        <section id="pause-you" class="pause-group" aria-labelledby="pause-you-title">
+          <h3 id="pause-you-title" class="pause-title">Toi</h3>
+          <div class="pause-name">
+            <span id="pause-name" class="pause-name-text"></span>
+            <button id="btn-rename" class="btn btn-sky btn-small" type="button">Changer de nom</button>
+          </div>
+          <div id="pause-colors" class="swatches" role="radiogroup" aria-label="Ta couleur"></div>
+        </section>
+
+        <section id="pause-difficulty-group" class="pause-group" aria-labelledby="pause-difficulty-title">
+          <h3 id="pause-difficulty-title" class="pause-title">Difficulté <span class="pause-hint">· le niveau recommence</span></h3>
+          <div class="difficulty" role="radiogroup" aria-labelledby="pause-difficulty-title">
+            <button type="button" role="radio" data-pause-difficulty="normal">Normal</button>
+            <button type="button" role="radio" data-pause-difficulty="chaud">Chaud</button>
+            <button type="button" role="radio" data-pause-difficulty="hardcore">Hardcore</button>
+          </div>
+        </section>
+
+        <section id="pause-team-group" class="pause-group" aria-labelledby="pause-team-title">
+          <h3 id="pause-team-title" class="pause-title"></h3>
+          <div id="pause-teams" class="team-buttons"></div>
+        </section>
+
+        <section id="pause-campaign" class="pause-group" aria-labelledby="pause-campaign-title">
+          <h3 id="pause-campaign-title" class="pause-title">Crée ton parti</h3>
+          <button id="btn-pause-campaign" class="btn btn-sky" type="button"></button>
+        </section>
+
+        <div class="actions actions-center">
+          <button id="btn-pause-settings" class="btn btn-quiet" type="button">Options</button>
+          <button id="btn-pause-menu" class="btn btn-quiet" type="button">Menu principal</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Rejoindre une partie en ligne -->
+  <section id="screen-join" class="screen" hidden>
+    <div class="screen-body">
+      <article class="panel pause-panel">
+        <h2 class="ribbon"><span>Rejoindre</span></h2>
+        <form id="join-form" class="net-form">
+          <label class="field" for="join-code">
+            <span class="pause-title">Code de la partie</span>
+            <input id="join-code" class="code-input" type="text" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD">
+          </label>
+          <label class="field" for="join-name">
+            <span class="pause-title">Ton nom</span>
+            <input id="join-name" type="text" maxlength="16" autocomplete="nickname" spellcheck="false">
+          </label>
+          <button class="btn btn-go" type="submit">Rejoindre</button>
+        </form>
+        <p id="join-status" class="net-status" role="status"></p>
+        <div class="actions actions-center">
+          <button id="btn-join-back" class="btn btn-quiet" type="button">Retour</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Salon d'une partie en ligne -->
+  <section id="screen-lobby" class="screen" hidden>
+    <div class="screen-body">
+      <article class="panel pause-panel">
+        <h2 class="ribbon"><span>Salon</span></h2>
+        <div class="room">
+          <p class="room-code"><span class="room-code-label">Code</span><strong id="lobby-code">····</strong></p>
+          <button id="btn-share" class="btn btn-sky btn-small" type="button">Partager le lien</button>
+        </div>
+        <p id="lobby-hint" class="pause-where"></p>
+
+        <section class="pause-group" aria-labelledby="lobby-name-title">
+          <label class="field" for="lobby-name">
+            <span id="lobby-name-title" class="pause-title">Ton nom</span>
+            <input id="lobby-name" type="text" maxlength="16" autocomplete="nickname" spellcheck="false">
+          </label>
+        </section>
+
+        <section class="pause-group" aria-labelledby="lobby-teams-title">
+          <h3 id="lobby-teams-title" class="pause-title">Ton camp</h3>
+          <div id="lobby-teams" class="team-buttons"></div>
+        </section>
+
+        <section class="pause-group" aria-labelledby="lobby-players-title">
+          <h3 id="lobby-players-title" class="pause-title">Joueurs</h3>
+          <ul id="lobby-players" class="lobby-players"></ul>
+          <p class="pause-hint">Places libres : des IA. Trois humains par camp au plus.</p>
+        </section>
+
+        <p id="lobby-status" class="net-status" role="status"></p>
+        <div class="actions actions-center">
+          <button id="btn-lobby-start" class="btn btn-go" type="button">Lancer la partie</button>
+          <button id="btn-lobby-leave" class="btn btn-quiet" type="button">Quitter</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Options : contrôles et traînée -->
+  <section id="screen-settings" class="screen" hidden>
+    <div class="screen-body">
+      <article class="panel pause-panel">
+        <h2 class="ribbon"><span>Options</span></h2>
+
+        <section class="pause-group pause-group-first" aria-labelledby="setting-control-title">
+          <h3 id="setting-control-title" class="pause-title">Contrôles</h3>
+          <div class="difficulty difficulty-two" role="radiogroup" aria-labelledby="setting-control-title">
+            <button type="button" role="radio" data-setting="control" data-value="auto">Auto</button>
+            <button type="button" role="radio" data-setting="control" data-value="manual">Manuel</button>
+          </div>
+          <p id="setting-control-note" class="difficulty-note"></p>
+        </section>
+
+        <section class="pause-group" aria-labelledby="setting-trail-title">
+          <h3 id="setting-trail-title" class="pause-title">Ta traînée</h3>
+          <div class="difficulty difficulty-two" role="radiogroup" aria-labelledby="setting-trail-title">
+            <button type="button" role="radio" data-setting="trail" data-value="vulnerable">Vulnérable</button>
+            <button type="button" role="radio" data-setting="trail" data-value="safe">Protégée</button>
+          </div>
+          <p id="setting-trail-note" class="difficulty-note"></p>
+        </section>
+
+        <div class="actions actions-center">
+          <button id="btn-settings-close" class="btn btn-go" type="button">OK</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Fin de partie ou de niveau -->
+  <section id="screen-over" class="screen" hidden>
+    <div class="screen-body">
+      <article class="panel over-panel">
+        <h2 id="over-ribbon" class="ribbon"><span id="over-title">Perdu</span></h2>
+        <ol id="over-steps" class="steps" aria-label="Progression de la campagne" hidden></ol>
+        <p id="over-reason" class="over-reason"></p>
+        <div class="standings-block">
+          <h3 class="standings-title"><span id="standings-label">Résultats</span><span class="standings-note">Part de l'arène · victoire à 51 %</span></h3>
+          <ol id="over-standings" class="standings"></ol>
+        </div>
+        <dl class="results">
+          <div><dt>Score</dt><dd id="over-score"></dd></div>
+          <div><dt>Éliminations</dt><dd id="over-kills"></dd></div>
+          <div><dt>Record</dt><dd id="over-best"></dd></div>
+        </dl>
+        <p id="over-record" class="badge badge-record" hidden>Nouveau record !</p>
+        <div class="actions actions-center">
+          <button id="btn-primary" class="btn btn-go" type="button">Rejouer</button>
+          <button id="btn-menu" class="btn btn-quiet" type="button">Menu</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <script src="js/config.js"></script>
+  <script src="js/names.js"></script>
+  <script src="js/maps.js"></script>
+  <script src="js/grid.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/abilities.js"></script>
+  <script src="js/speech.js"></script>
+  <script src="js/online.js"></script>
+  <script src="vendor/peerjs.min.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/contour.js"></script>
+  <script src="js/terrain.js"></script>
+  <script src="js/ground.js"></script>
+  <script src="js/projection.js"></script>
+  <script src="js/minimap.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/input.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
