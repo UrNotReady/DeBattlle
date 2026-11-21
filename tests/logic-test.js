@@ -9,7 +9,7 @@ const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
 
-const files = ['config.js', 'names.js', 'maps.js', 'grid.js', 'ai.js', 'game.js', 'abilities.js', 'projection.js', 'speech.js', 'online.js'];
+const files = ['config.js', 'names.js', 'maps.js', 'grid.js', 'ai.js', 'stats.js', 'vision.js', 'game.js', 'abilities.js', 'projection.js', 'speech.js', 'online.js'];
 const source = files
   .map((file) => fs.readFileSync(path.join(__dirname, '..', 'js', file), 'utf8').replace("'use strict';", ''))
   .join('\n');
@@ -19,7 +19,9 @@ const api = vm.runInNewContext(`'use strict';\n${source}\n({ CONFIG, createGame,
   CAMPAIGN, generateCandidates, generatePartyNames, generateRivals, createIdentity, createSpeech, SPEECH_LINES, SPEECH,
   SOLO_COLORS, recolorSoloGame, ZONE_KINDS, completeRegions, steerHuman, handOverToBot, TEAMS, settleCapture,
   createHostSync, applyGuestCommand, createMirror, applyState, updateMirror, isOnlineWin, diffOwners,
-  createLobby, lobbyJoin, lobbyPick, lobbyRename, lobbyLeave, cleanPlayerName });`);
+  createLobby, lobbyJoin, lobbyPick, lobbyRename, lobbyLeave, cleanPlayerName,
+  entityStats, landRates, tickStats, createVision, updateVision, isVisibleAt, useRadar, useScout, lobbySetMatch, matchArena,
+  ARENA_SHAPES, createGrid, isInsideShape });`);
 const { CONFIG, updateGame, setPlayerHeading, resolvePosition, resolveHeadOnCollisions,
   killEntity, claimDisc, releaseTerritory, ownerAt, cellsToScore, isHome, getSpeed, maybeRecruit,
   useBoost, useDash, dashProfile, isDashing, useBomb } = api;
@@ -1300,6 +1302,137 @@ const tests = {
     }
     assert.ok(captures > 200, `trop peu de captures (${captures})`);
     console.log(`     ${captures} captures ; surface cumulée par camp sur 6 parties : ${JSON.stringify(totals)} ; joueurs en fin de partie : ${sizes}`);
+  },
+
+  'K/D/A : élimination, mort, et assist pour qui a serré la victime de près': () => {
+    const game = createGame({ mode: 'demo' });
+    const [victim, killer, helper] = game.entities;
+    for (const entity of [victim, killer, helper]) { entity.isHuman = true; entity.targetAngle = null; }
+    victim.trailPoints = [{ x: victim.x, y: victim.y }];
+    helper.x = victim.x + 1; helper.y = victim.y;
+    api.tickStats(game, CONFIG.stats.pressureEvery + 0.01);   // relevé de la « gêne »
+    killEntity(game, victim, killer, 'cut');
+    assert.deepStrictEqual({ ...api.entityStats(killer) }, { kills: 1, deaths: 0, assists: 0 });
+    assert.deepStrictEqual({ ...api.entityStats(victim) }, { kills: 0, deaths: 1, assists: 0 });
+    assert.strictEqual(api.entityStats(helper).assists, 1);
+    // Au-delà de la fenêtre, plus d'assist.
+    const game2 = createGame({ mode: 'demo' });
+    const [v2, k2, h2] = game2.entities;
+    v2.trailPoints = [{ x: v2.x, y: v2.y }];
+    h2.x = v2.x + 1; h2.y = v2.y;
+    api.tickStats(game2, CONFIG.stats.pressureEvery + 0.01);
+    h2.x = v2.x + 30;
+    api.tickStats(game2, CONFIG.stats.assistWindow + 1);
+    killEntity(game2, v2, k2, 'cut');
+    assert.strictEqual(api.entityStats(h2).assists, 0);
+  },
+
+  'K/D/A : prendre du territoire à un camp compte comme une gêne': () => {
+    const game = createGame({ mode: 'demo' });
+    const [victim, killer, thief] = game.entities;
+    const index = game.grid.owner.findIndex((owner) => owner === victim.landId);
+    api.setOwner(game.grid, index, thief.landId);
+    api.settleCapture(game, thief, 1);
+    killEntity(game, victim, killer, 'cut');
+    assert.strictEqual(api.entityStats(thief).assists, 1);
+  },
+
+  'taux par seconde : moyenne glissante sur la fenêtre': () => {
+    const game = createGame({ mode: 'demo' });
+    const land = game.lands[0];
+    api.tickStats(game, 0);
+    for (let second = 0; second < 20; second++) {
+      // Un camp qui gagne exactement 1 % de l'arène par seconde.
+      const cells = Math.round(game.grid.playableCount * 0.01);
+      let added = 0;
+      for (let index = 0; index < game.grid.owner.length && added < cells; index++) {
+        if (game.grid.playable[index] && game.grid.owner[index] === 0) { api.setOwner(game.grid, index, land.id); added++; }
+      }
+      api.tickStats(game, 1);
+    }
+    const rates = api.landRates(game, land.id);
+    assert.ok(Math.abs(rates.share - 0.01) < 0.001, `taux ${rates.share}`);
+    assert.ok(game.stats.samples.length <= CONFIG.stats.rateWindow / CONFIG.stats.sampleEvery + 1);
+  },
+
+  'cartes : Anneau percé au centre, Archipel en îles, zones en règles Zones seulement': () => {
+    const ring = api.createGrid(62, 4, api.ARENA_SHAPES.ring(62, { zones: 'quartier' }));
+    assert.strictEqual(api.isInsideShape({ outlines: ring.outlines }, 31, 31), false, 'le centre de l\'anneau est vide');
+    assert.strictEqual(ring.regions.length, api.ZONE_KINDS.quartier.count);
+    const islands = api.ARENA_SHAPES.archipel(66, { zones: false });
+    assert.strictEqual(islands.regions.length, 0);
+    assert.ok(api.isInsideShape(islands, 33, 33));
+    assert.strictEqual(api.matchArena({ format: 'duel', map: 'france', rules: 'normal' }).zones, false);
+    const france = api.matchArena({ format: 'teams', map: 'france', rules: 'zones' });
+    assert.strictEqual(api.createGrid(france.size, 4, api.ARENA_SHAPES.france(france.size, france)).regions.length, 12);
+  },
+
+  'brouillard : un camp ne voit que près des siens, et garde la carte qu\'il a vue': () => {
+    const game = createGame({ mode: 'team', teamKey: api.TEAMS[0].key });
+    const vision = api.createVision(game, game.player.landId);
+    api.updateVision(vision, game, 0, true);
+    for (const entity of game.entities) {
+      const ally = entity.landId === game.player.landId;
+      if (ally) assert.ok(api.isVisibleAt(vision, entity.x, entity.y));
+      const far = Math.min(...game.entities.filter((other) => other.landId === game.player.landId)
+        .map((other) => Math.hypot(other.x - entity.x, other.y - entity.y)));
+      if (!ally && far > CONFIG.vision.headRadius + CONFIG.teamBaseRadius + CONFIG.vision.landRadius + 2) {
+        assert.ok(vision.hidden.has(entity.id), 'un adversaire lointain est visible');
+      }
+    }
+    // Ce que le camp connaît : son territoire, exactement.
+    assert.strictEqual(vision.known.counts[game.player.landId], game.grid.counts[game.player.landId]);
+    const enemy = game.lands.find((land) => land.id !== game.player.landId);
+    assert.ok(vision.known.counts[enemy.id] < game.grid.counts[enemy.id], 'le territoire adverse lointain est connu');
+    // Le radar révèle autour du joueur.
+    const before = vision.visible.reduce((sum, value) => sum + value, 0);
+    assert.ok(api.useRadar(game, game.player));
+    for (let i = 0; i < 60; i++) updateGame(game, STEP);
+    api.updateVision(vision, game, 0, true);
+    assert.ok(vision.visible.reduce((sum, value) => sum + value, 0) > before);
+    assert.strictEqual(api.useRadar(game, game.player), false, 'radar rechargé trop vite');
+  },
+
+  'en ligne, équipes : l\'hôte n\'envoie à un camp que ce qu\'il voit': () => {
+    const [a, b] = api.TEAMS.map((team) => team.key);
+    const game = api.createGame({ mode: 'online', arena: { shape: 'france', size: 101 }, humans: [{ peer: 'host', name: 'Zoé', teamKey: a }, { peer: 'p2', name: 'Max', teamKey: b }] });
+    const max = game.entities.find((entity) => entity.peer === 'p2');
+    const vision = api.createVision(game, max.landId);
+    api.updateVision(vision, game, 0, true);
+    const sync = api.createHostSync(game, vision);
+    const wire = (message) => JSON.parse(JSON.stringify(message));
+    const start = wire(sync.start());
+    assert.strictEqual(start.fog, true);
+    const mirror = api.createMirror(start, 'p2');
+    for (const entity of game.entities) {
+      const copy = mirror.entities[entity.id - 1];
+      if (vision.hidden.has(entity.id)) {
+        assert.strictEqual(copy.hidden, true);
+        assert.strictEqual(copy.x, 0, 'la position d\'un adversaire caché est partie');
+      }
+    }
+    assert.ok(vision.hidden.size > 0);
+    for (const land of game.lands) assert.strictEqual(mirror.grid.counts[land.id], vision.known.counts[land.id]);
+  },
+
+  'en ligne, duel : deux joueurs, pas d\'IA, ni brouillard ni renforts': () => {
+    const lobby = api.createLobby({ name: 'Zoé', teamKey: 'lfi' });
+    assert.ok(api.lobbySetMatch(lobby, { format: 'duel', map: 'ring', rules: 'normal' }));
+    assert.strictEqual(api.lobbyJoin(lobby, 'p2', 'Max'), null);
+    assert.strictEqual(api.lobbyJoin(lobby, 'p3', 'Léa'), 'full');
+    const game = api.createGame({ mode: 'online', format: 'duel', arena: api.matchArena(lobby.match), humans: lobby.players });
+    assert.strictEqual(game.entities.length, 2);
+    assert.strictEqual(game.lands.length, 2);
+    assert.ok(game.entities.every((entity) => entity.isHuman));
+    assert.strictEqual(api.useRadar(game, game.player), false);
+    const mirror = api.createMirror(JSON.parse(JSON.stringify(api.createHostSync(game).start())), 'p2');
+    assert.strictEqual(mirror.player.name, 'Max');
+    assert.strictEqual(mirror.grid.playableCount, game.grid.playableCount);
+    // Trois joueurs dans le salon : plus de duel possible.
+    const crowded = api.createLobby({ name: 'A', teamKey: 'lfi' });
+    api.lobbyJoin(crowded, 'p2', 'B');
+    api.lobbyJoin(crowded, 'p3', 'C');
+    assert.strictEqual(api.lobbySetMatch(crowded, { format: 'duel' }), false);
   },
 };
 

@@ -1,28 +1,74 @@
-/* DeBattle — style « jeu de plateau » : panneaux crème aux bords
-   blancs, rubans, gros boutons ronds qui s'enfoncent, une police ronde.
-   Un seul univers visuel, clair : le ciel et la banquise du jeu derrière.
-   Idée de mise en page : l'arène occupe tout l'écran ; menus en panneaux
+/* DeBattle — style repris de « L'Avenir en commun » : violets profonds,
+   rouge, crème, charbon, jaune, et des touches de vert, bleu et rose.
+   Deux thèmes : Nuit (par défaut : panneaux violets sur un ciel étoilé) et
+   Jour (classe `light` : panneaux crème sur un ciel crème et lavande).
+   Titres en Public Sans très gras, textes en Inter, chiffres du jeu en
+   Pixelify Sans, pour la touche arcade. Gros boutons qui s'enfoncent,
+   rubans de titre. L'arène occupe tout l'écran ; menus en panneaux
    centrés, affichage de jeu aux quatre coins. */
 
 :root {
-  color-scheme: light;
-  --ink: #23314f;              /* texte, contours */
-  --ink-soft: #5d6a86;
-  --paper: #fff8ea;            /* panneaux */
-  --paper-edge: #ead6b0;       /* tranche des panneaux */
-  --ribbon: #e8473f;           /* rubans de titre */
-  --ribbon-dark: #b3302a;
-  --go: #46c35b;               /* action principale */
-  --go-dark: #2b8d3f;
-  --sky: #3ea2ee;              /* action secondaire */
-  --sky-dark: #2672b8;
-  --sun: #ffc93c;              /* petites touches de joie */
-  --veil: rgba(34, 118, 172, 0.5);
-  --font: "Fredoka", "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+  --violet: #4C0297;
+  --violet2: #7b13d6;
+  --violetD: #2c0159;
+  --rouge: #D1271C;
+  --rougeF: #8f1a12;
+  --creme: #FFFCF4;
+  --charbon: #212320;
+  --jaune: #f9c900;
+  --vert: #2e9959;
+  --bleu: #3885f4;
+  --rose: #ed5fb1;
+
+  --bg: #170830;
+  --ink: var(--creme);         /* texte */
+  --ink-soft: rgba(255, 252, 244, 0.72);
+  --title: var(--creme);
+  --paper: var(--violetD);     /* panneaux */
+  --panel-top: #3d0a78;
+  --paper-edge: #12042a;       /* tranche des panneaux */
+  --rim: var(--violet2);       /* bord des panneaux et pastilles */
+  --surface: #3b0f7a;          /* champs, options, cases dans un panneau */
+  --line: rgba(255, 252, 244, 0.14);
+  --chip: rgba(44, 1, 89, 0.86);
+  --hud-card: rgba(44, 1, 89, 0.82);
+  --shadow: rgba(0, 0, 0, 0.45);
+  --ribbon: var(--rouge);      /* rubans de titre */
+  --ribbon-dark: var(--rougeF);
+  --go: var(--vert);           /* action principale */
+  --go-dark: #1d6b3d;
+  --sky: var(--bleu);          /* action secondaire */
+  --sky-dark: #1f5cb8;
+  --quiet-label: var(--creme);
+  --sun: var(--jaune);
+  --veil: rgba(15, 5, 36, 0.55);
+  --font: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-title: "Public Sans", "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-digits: "Pixelify Sans", "Courier New", monospace;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
+}
+
+body.light {
+  color-scheme: light;
+  --bg: #eedfff;
+  --ink: var(--charbon);
+  --ink-soft: #5b5560;
+  --title: var(--violet);
+  --paper: var(--creme);
+  --panel-top: #ffffff;
+  --paper-edge: #e4d9c0;
+  --rim: #ffffff;
+  --surface: #ffffff;
+  --line: #e4d9c0;
+  --chip: rgba(255, 252, 244, 0.92);
+  --hud-card: rgba(255, 252, 244, 0.92);
+  --shadow: rgba(76, 2, 151, 0.22);
+  --quiet-label: var(--charbon);
+  --veil: rgba(76, 2, 151, 0.22);
 }
 
 * {
@@ -41,7 +87,7 @@ body {
 body {
   position: fixed;
   inset: 0;
-  background: #2a86bf;
+  background: var(--bg);
   color: var(--ink);
   font-family: var(--font);
   font-weight: 500;
@@ -64,13 +110,291 @@ body {
   white-space: nowrap;
 }
 
+/* Le fond spatial, sous l'arène ; l'arène est transparente autour du plateau. */
+#space,
 #arena {
+  position: fixed;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
+}
+
+#space {
+  pointer-events: none;
+}
+
+#arena {
   touch-action: none;
   outline: none;
 }
+
+/* Titres et boutons en Public Sans très gras ; chiffres du jeu en pixels. */
+h1, h2, h3, .btn, .ribbon, .tag, .badge, .difficulty button, .map-choice button {
+  font-family: var(--font-title);
+}
+
+.ribbon, .btn { font-weight: 900; letter-spacing: 0.02em; }
+
+.hud-share, .hud-stats dd, .ranking li > span:last-child, .room-code strong, .results dd, .progress-share, .board-share {
+  font-family: var(--font-digits);
+  font-weight: 700;
+}
+
+.panel h2, .mode-head h2, .pause-title { color: var(--title); }
+
+.hud-pause[aria-pressed="true"] {
+  background: var(--jaune);
+  color: var(--charbon);
+}
+
+/* --- Bascule Jour / Nuit ----------------------------------------------- */
+
+.theme-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-left: auto;
+  border: 3px solid var(--rim);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--jaune);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+body.light .theme-toggle { color: var(--violet); }
+
+.theme-toggle svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+
+.theme-toggle .icon-moon { fill: currentColor; stroke: none; }
+.theme-toggle[data-current="night"] .icon-moon,
+.theme-toggle[data-current="day"] .icon-sun { display: none; }
+
+.theme-toggle:focus-visible { outline: 3px solid var(--jaune); outline-offset: 3px; }
+
+/* --- Choix de la carte, dans le salon ---------------------------------- */
+
+.map-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.map-choice button {
+  flex: 1 1 30%;
+  min-height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--line);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.map-choice button[aria-checked="true"] {
+  background: var(--jaune);
+  color: var(--charbon);
+}
+
+.map-choice button:disabled,
+.difficulty button:disabled { cursor: default; opacity: 0.75; }
+.map-choice button[aria-checked="true"]:disabled,
+.difficulty button[aria-checked="true"]:disabled { opacity: 1; }
+
+/* --- Côté droit du HUD : classement et progression des équipes ---------- */
+
+.hud-side {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  max-width: 62vw;
+}
+
+.hud-side .ranking {
+  max-width: 100%;
+}
+
+.team-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+  font-size: 11px;
+}
+
+.team-progress li {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 6.5em) 3.6em repeat(3, 5.6em);
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 0;
+  border-radius: 8px;
+  background: var(--hud-card);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.team-progress li::before {
+  content: '';
+  align-self: stretch;
+  border-radius: 8px 0 0 8px;
+  background: var(--slab);
+}
+
+.team-progress .is-player { box-shadow: 0 0 0 2px var(--jaune); }
+.progress-name { overflow: hidden; font-weight: 800; text-overflow: ellipsis; }
+.progress-share { text-align: right; }
+.progress-rate { color: var(--ink-soft); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* Sur petit écran, le panneau prend trop de place : il reste dans le classement complet. */
+@media (max-width: 720px) {
+  .team-progress { display: none; }
+}
+
+/* --- Fil des éliminations ------------------------------------------------ */
+
+.killfeed {
+  position: fixed;
+  top: calc(var(--safe-top) + 64px);
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transform: translateX(-50%);
+  list-style: none;
+  pointer-events: none;
+}
+
+.killfeed li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: var(--hud-card);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  animation: kill-line 4.5s ease-out forwards;
+}
+
+.kill-name {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--slab);
+  color: var(--slab-text, #ffffff);
+  font-weight: 800;
+}
+
+.kill-name.is-me { box-shadow: 0 0 0 2px var(--jaune); }
+.kill-mark { color: var(--ink-soft); }
+
+@keyframes kill-line {
+  0% { opacity: 0; transform: translateY(-6px); }
+  6%, 80% { opacity: 1; transform: none; }
+  100% { opacity: 0; }
+}
+
+/* --- Caméra libre --------------------------------------------------------- */
+
+.camera-chip {
+  position: fixed;
+  bottom: calc(var(--safe-bottom) + 112px);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 6px 6px 6px 14px;
+  border: 2px solid var(--rim);
+  border-radius: 14px;
+  background: var(--hud-card);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  transform: translateX(-50%);
+}
+
+.camera-chip .btn { --depth: 3px; min-height: 36px; }
+
+/* --- Classement complet ---------------------------------------------- */
+
+.scoreboard {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(560px, calc(100% - 24px));
+  max-height: calc(100% - 40px - var(--safe-top) - var(--safe-bottom));
+  padding: 16px;
+  border: 3px solid var(--rim);
+  border-radius: 18px;
+  background: linear-gradient(to bottom, var(--panel-top), var(--paper));
+  box-shadow: 0 6px 0 var(--paper-edge), 0 18px 34px var(--shadow);
+  color: var(--ink);
+  transform: translate(-50%, -50%);
+  animation: screen-in 0.15s ease-out;
+}
+
+.scoreboard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scoreboard-head h2 { font-size: 22px; font-weight: 900; }
+.scoreboard-body { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+
+.board-land header {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 10px;
+  border-radius: 8px 8px 0 0;
+  background: var(--slab);
+  color: var(--slab-text, #ffffff);
+  font-family: var(--font-title);
+  font-weight: 900;
+}
+
+.board-land table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-land th,
+.board-land td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+
+.board-land th:first-child,
+.board-land td:first-child { text-align: left; }
+.board-land th { color: var(--ink-soft); font-size: 12px; font-weight: 600; }
+.board-land .is-me td { color: var(--jaune); font-weight: 800; }
+body.light .board-land .is-me td { color: var(--violet); }
+.board-land .is-out td { opacity: 0.55; }
+
 
 /* --- Boutons ---------------------------------------------------------- */
 
@@ -103,9 +427,9 @@ body {
 .btn-go { --face: var(--go); --edge: var(--go-dark); }
 .btn-sky { --face: var(--sky); --edge: var(--sky-dark); }
 .btn-quiet {
-  --face: #ffffff;
+  --face: var(--surface);
   --edge: var(--paper-edge);
-  --label: var(--ink);
+  --label: var(--quiet-label);
   text-shadow: none;
 }
 
@@ -178,10 +502,10 @@ body {
   flex-direction: column;
   gap: 14px;
   padding: 22px 20px;
-  border: 4px solid #ffffff;
+  border: 4px solid var(--rim);
   border-radius: 26px;
-  background: linear-gradient(to bottom, #fffdf6, var(--paper));
-  box-shadow: 0 7px 0 var(--paper-edge), 0 18px 34px rgba(20, 50, 80, 0.25);
+  background: linear-gradient(to bottom, var(--panel-top), var(--paper));
+  box-shadow: 0 7px 0 var(--paper-edge), 0 18px 34px var(--shadow);
   animation: panel-in 0.32s cubic-bezier(0.3, 1.4, 0.5, 1);
 }
 
@@ -261,7 +585,7 @@ body {
   align-items: center;
   margin-top: 0.3em;
   padding: 0.08em 0.36em 0.16em 0.28em;
-  border: 4px solid #ffffff;
+  border: 4px solid var(--rim);
   border-radius: 18px;
   background: linear-gradient(100deg, var(--ribbon) 0 46%, var(--sky-dark) 46% 100%);
   box-shadow: 0 6px 0 var(--ink);
@@ -324,7 +648,7 @@ body {
   font-weight: 600;
   line-height: 1.4;
   text-align: center;
-  text-shadow: 0 2px 0 rgba(20, 50, 80, 0.35);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
   text-wrap: balance;
 }
 
@@ -368,7 +692,7 @@ body {
   min-width: 0;
   padding: 6px 2px;
   border-radius: 10px;
-  background: #efe3c9;
+  background: var(--line);
   color: var(--ink-soft);
   font-size: 11px;
   font-weight: 600;
@@ -407,7 +731,7 @@ body {
   gap: 10px;
   padding: 14px 16px;
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--chip);
 }
 
 .controls-help summary {
@@ -453,10 +777,10 @@ body {
 .pick-option {
   min-height: 56px;
   padding: 10px 16px;
-  border: 3px solid #ffffff;
+  border: 3px solid var(--rim);
   border-radius: 18px;
-  background: #ffffff;
-  box-shadow: 0 5px 0 var(--paper-edge), inset 0 0 0 2px #efe3c9;
+  background: var(--surface);
+  box-shadow: 0 5px 0 var(--paper-edge), inset 0 0 0 2px var(--line);
   color: var(--ink);
   font: inherit;
   font-size: 19px;
@@ -506,8 +830,8 @@ body {
   gap: 12px;
   padding: 14px;
   border-radius: 18px;
-  background: #ffffff;
-  box-shadow: inset 0 0 0 2px #efe3c9;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--line);
 }
 
 .standings-title {
@@ -556,7 +880,7 @@ body {
 .standing-track {
   height: 10px;
   border-radius: 6px;
-  background: #f1e8d4;
+  background: var(--line);
   overflow: hidden;
 }
 
@@ -609,8 +933,8 @@ body {
   gap: 2px;
   padding: 8px 4px;
   border-radius: 14px;
-  background: #ffffff;
-  box-shadow: inset 0 0 0 2px #efe3c9;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--line);
 }
 
 .results dt {
@@ -673,7 +997,7 @@ body {
 /* La part d'arène du joueur, en grosse pastille aux couleurs du camp. */
 .hud-share {
   padding: 4px 16px 6px;
-  border: 3px solid #ffffff;
+  border: 3px solid var(--rim);
   border-radius: 18px;
   background: linear-gradient(to bottom, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0) 60%), var(--slab);
   box-shadow: 0 5px 0 var(--slab-side);
@@ -689,8 +1013,8 @@ body {
   gap: 4px;
   padding: 7px 12px;
   border-radius: 14px;
-  background: rgba(255, 248, 234, 0.9);
-  box-shadow: 0 3px 0 rgba(35, 49, 79, 0.15);
+  background: var(--hud-card);
+  box-shadow: 0 3px 0 rgba(33, 35, 32, 0.15);
 }
 
 .hud-stats {
@@ -713,20 +1037,8 @@ body {
   font-weight: 700;
 }
 
-.skull-label {
-  display: flex;
-}
 
-.skull {
-  display: block;
-  width: 15px;
-}
 
-.skull svg {
-  display: block;
-  width: 100%;
-  fill: var(--ink);
-}
 
 .hud-region {
   max-width: 50vw;
@@ -785,7 +1097,7 @@ body {
 }
 
 .ranking .is-player {
-  box-shadow: 0 3px 0 var(--slab-side), 0 0 0 3px #ffffff;
+  box-shadow: 0 3px 0 var(--slab-side), 0 0 0 3px var(--rim);
 }
 
 .ranking-rank {
@@ -794,7 +1106,7 @@ body {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--chip);
   color: var(--ink);
   font-size: 12px;
   font-weight: 700;
@@ -816,7 +1128,7 @@ body {
   top: -9px;
   right: -4px;
   padding: 0 6px;
-  border: 2px solid #ffffff;
+  border: 2px solid var(--rim);
   border-radius: 999px;
   background: var(--ink);
   color: #ffffff;
@@ -864,7 +1176,7 @@ body {
   width: max-content;
   max-width: calc(100% - 48px);
   padding: 10px 22px 12px;
-  border: 3px solid #ffffff;
+  border: 3px solid var(--rim);
   border-radius: 16px;
   background: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 60%), var(--ribbon);
   box-shadow: 0 5px 0 var(--ribbon-dark);
@@ -939,7 +1251,7 @@ body {
 }
 
 .ability {
-  --ring-color: rgba(35, 49, 79, 0.5);
+  --ring-color: rgba(33, 35, 32, 0.5);
   position: relative;
   display: grid;
   place-items: center;
@@ -948,8 +1260,8 @@ body {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 4px 0 rgba(35, 49, 79, 0.22), 0 0 0 3px rgba(255, 255, 255, 0.7);
+  background: var(--chip);
+  box-shadow: 0 4px 0 rgba(33, 35, 32, 0.22), 0 0 0 3px rgba(255, 255, 255, 0.7);
   color: var(--ink);
   font: inherit;
   cursor: pointer;
@@ -972,7 +1284,7 @@ body {
 }
 
 .ring-track {
-  stroke: rgba(35, 49, 79, 0.1);
+  stroke: rgba(33, 35, 32, 0.1);
 }
 
 .ring-fill {
@@ -1002,7 +1314,7 @@ body {
   min-width: 20px;
   height: 20px;
   padding: 0 5px;
-  border: 2px solid #ffffff;
+  border: 2px solid var(--rim);
   border-radius: 10px;
   background: var(--ink);
   color: #ffffff;
@@ -1021,7 +1333,7 @@ body {
   gap: 6px;
   padding: 3px 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--chip);
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
@@ -1031,7 +1343,7 @@ body {
 
 .ability-hint kbd {
   padding: 1px 5px;
-  border: 1px solid rgba(35, 49, 79, 0.35);
+  border: 1px solid rgba(33, 35, 32, 0.35);
   border-radius: 3px;
   font: inherit;
   font-weight: 400;
@@ -1051,7 +1363,7 @@ body {
 /* Prête : anneau plein, à la couleur du camp. */
 .ability[data-state="ready"] {
   --ring-color: var(--slab);
-  background: #ffffff;
+  background: var(--surface);
 }
 
 /* En cours : le bouton prend la couleur du camp, l'anneau blanc décompte le temps. */
@@ -1103,8 +1415,8 @@ body {
   border: 2px solid rgba(255, 255, 255, 0.85);
   border-radius: 22px;
   border-width: 4px;
-  background: rgba(42, 110, 150, 0.55);
-  box-shadow: 0 5px 0 rgba(35, 49, 79, 0.25);
+  background: rgba(15, 5, 36, 0.6);
+  box-shadow: 0 5px 0 rgba(33, 35, 32, 0.25);
   pointer-events: none;
 }
 
@@ -1120,8 +1432,8 @@ body {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: #ffffff;
-  box-shadow: 0 2px 0 rgba(35, 49, 79, 0.18);
+  background: var(--surface);
+  box-shadow: 0 2px 0 rgba(33, 35, 32, 0.18);
   cursor: pointer;
   touch-action: manipulation;
   animation: compass-in 0.2s ease-out;
@@ -1133,7 +1445,7 @@ body {
   transform: rotate(var(--heading, 0rad));
 }
 
-.compass-north { fill: #d23b30; }
+.compass-north { fill: var(--rouge); }
 .compass-south { fill: var(--ink); opacity: 0.35; }
 
 .compass:active { transform: scale(0.9); }
@@ -1219,7 +1531,7 @@ body {
   gap: 6px;
   padding: 5px;
   border-radius: 16px;
-  background: #efe3c9;
+  background: var(--line);
 }
 
 .difficulty button {
@@ -1276,7 +1588,7 @@ body {
   width: 34px;
   height: 34px;
   margin: -3px 4px -3px 0;
-  border: 3px solid #ffffff;
+  border: 3px solid var(--rim);
   border-radius: 50%;
   background: var(--paper);
   box-shadow: 0 3px 0 var(--paper-edge);
@@ -1330,7 +1642,7 @@ body {
   flex-direction: column;
   gap: 10px;
   padding-top: 14px;
-  border-top: 2px dashed #efe3c9;
+  border-top: 2px dashed var(--line);
 }
 
 .pause-title {
@@ -1378,7 +1690,7 @@ body {
 .swatch {
   aspect-ratio: 1;
   min-width: 0;
-  border: 3px solid #ffffff;
+  border: 3px solid var(--rim);
   border-radius: 50%;
   background: var(--slab);
   box-shadow: 0 3px 0 var(--slab-side);
@@ -1399,7 +1711,7 @@ body {
 
 /* Le camp joué, cerclé comme ta ligne du classement. */
 .team-buttons .is-current {
-  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.08), 0 var(--depth) 0 var(--edge), 0 0 0 3px #ffffff, 0 0 0 6px var(--ink);
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.08), 0 var(--depth) 0 var(--edge), 0 0 0 3px var(--rim), 0 0 0 6px var(--ink);
 }
 
 /* Nom écrit soi-même, sous les propositions. */
@@ -1413,9 +1725,9 @@ body {
   min-width: 0;
   min-height: 48px;
   padding: 0 14px;
-  border: 3px solid #efe3c9;
+  border: 3px solid var(--line);
   border-radius: 14px;
-  background: #ffffff;
+  background: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 17px;
@@ -1425,7 +1737,7 @@ body {
 }
 
 .pick-custom input::placeholder {
-  color: #9aa3b8;
+  color: var(--ink-soft);
   font-weight: 500;
 }
 
@@ -1456,6 +1768,10 @@ body {
 
   .ranking {
     font-size: 12px;
+  }
+
+  .ranking li > span:last-child {
+    font-family: var(--font-title);
   }
 
   .ranking li {
@@ -1514,9 +1830,9 @@ body {
 .field input {
   min-height: 48px;
   padding: 0 14px;
-  border: 3px solid #efe3c9;
+  border: 3px solid var(--line);
   border-radius: 14px;
-  background: #ffffff;
+  background: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 17px;
@@ -1557,7 +1873,7 @@ body {
   gap: 12px;
   padding: 10px 12px 10px 16px;
   border-radius: 16px;
-  background: #efe3c9;
+  background: var(--line);
 }
 
 .room-code {
@@ -1603,7 +1919,7 @@ body {
 .lobby-players .lobby-team {
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--chip);
   color: var(--ink);
   font-size: 12px;
 }
@@ -1622,7 +1938,7 @@ body {
 }
 
 .lobby-players .is-me {
-  box-shadow: 0 3px 0 var(--slab-side), 0 0 0 3px #ffffff, 0 0 0 6px var(--ink);
+  box-shadow: 0 3px 0 var(--slab-side), 0 0 0 3px var(--rim), 0 0 0 6px var(--ink);
 }
 
 .team-buttons .is-full {
@@ -1636,4 +1952,13 @@ body {
   font-size: 12px;
   line-height: 1.4;
   text-align: center;
+}
+
+.board-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 3px;
+  background: var(--slab);
 }

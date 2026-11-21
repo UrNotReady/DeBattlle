@@ -47,6 +47,37 @@ const CONFIG = Object.freeze({
     team: Object.freeze({ shape: 'france', size: 101 }),
     demo: Object.freeze({ shape: 'round', size: 84 }),   // derrière l'accueil
   }),
+  /* Cartes au choix des parties en ligne : forme et taille, en duel (1v1)
+     et en équipes. Avec les règles « Zones », `zones` donne le découpage
+     (la France garde ses régions) ; en « Normal », pas de découpage. */
+  maps: Object.freeze({
+    round: Object.freeze({ label: 'Disque', shape: 'round', duel: 56, teams: 84, zones: 'quartier' }),
+    square: Object.freeze({ label: 'Carré', shape: 'square', duel: 50, teams: 76, zones: 'quartier' }),
+    ring: Object.freeze({ label: 'Anneau', shape: 'ring', duel: 62, teams: 90, zones: 'quartier' }),
+    archipel: Object.freeze({ label: 'Archipel', shape: 'archipel', duel: 66, teams: 96, zones: 'quartier' }),
+    france: Object.freeze({ label: 'France', shape: 'france', duel: 84, teams: 101, zones: 'region' }),
+  }),
+  /* Statistiques : un assist revient à chaque adversaire (autre que
+     l'auteur de l'élimination) qui, dans les `assistWindow` dernières
+     secondes, a pris du territoire au camp de la victime ou l'a serrée de
+     près (à moins de `pressureRadius` unités de sa tête ou de sa traînée,
+     pendant qu'elle était hors de chez elle). Les taux par seconde sont
+     des moyennes glissantes sur `rateWindow` secondes, relevées toutes les
+     `sampleEvery` secondes. */
+  stats: Object.freeze({ assistWindow: 8, pressureRadius: 4, pressureEvery: 0.2, rateWindow: 10, sampleEvery: 1 }),
+  /* Brouillard en équipes : on voit à `headRadius` unités d'un allié, à
+     `landRadius` unités du territoire de son camp, et toute une région
+     tenue par son camp (sa « tour de vision »). Recalculé toutes les
+     `refresh` secondes. Radar : une onde qui révèle tout à `radius`
+     unités du lanceur, pendant `duration` s, rechargée en `cooldown` s.
+     Éclaireur : un drone lancé droit devant à `speed` unités par seconde
+     pendant `flight` s, qui révèle `radius` unités autour de lui pendant
+     `duration` s. */
+  vision: Object.freeze({
+    headRadius: 11, landRadius: 3, refresh: 0.2,
+    radar: Object.freeze({ radius: 30, sweep: 0.9, duration: 3.5, cooldown: 20 }),
+    scout: Object.freeze({ radius: 8, speed: 15, flight: 1.6, duration: 7, cooldown: 14 }),
+  }),
   qualifyShare: 1 / 3,     // en équipes : part d'arène minimale pour passer au second tour
   resolution: 4,           // finesse du territoire : 4 x 4 cases par unité
   startRadius: 2.5,        // rayon du territoire initial, en solo
@@ -54,11 +85,11 @@ const CONFIG = Object.freeze({
   teamMaxSize: 9,          // taille maximale d'une équipe, renforts compris
   recruitChancePerShare: 10,   // chance de renfort : part d'arène gagnée x 10 (10 % gagnés = renfort assuré)
   teamBaseRadius: 4,       // rayon du territoire initial d'une équipe
-  speed: 8,                // unités parcourues par seconde, avec un petit territoire
+  speed: 8.8,              // unités parcourues par seconde, avec un petit territoire
   slowdownPerShare: 1,     // ralentissement : 1 % de vitesse en moins par % d'arène possédé...
   maxSlowdown: 0.4,        // ...jusqu'à 40 % de vitesse en moins
   maxStepDistance: 0.4,    // distance maximale parcourue en un pas de calcul
-  turnRate: 5,             // vitesse de virage, en radians par seconde
+  turnRate: 7,             // vitesse de virage, en radians par seconde : des virages secs, nerveux
   trailRadius: 0.5,        // demi-largeur de la traînée, pour les collisions
   headRadius: 0.4,         // demi-taille de la tête, pour le bord et les chocs
   selfHitGap: 2.5,         // longueur de traînée récente que la tête ne peut pas heurter
@@ -88,32 +119,28 @@ const CONFIG = Object.freeze({
   view: Object.freeze({ cellsAcross: 15, minCell: 20, maxCell: 40 }),
 });
 
-/* Palette : un ciel bleu franc, une banquise claire qui bleuit vers la
-   caméra, des aplats saturés pour les camps, une encre sombre pour les textes.
-   Chaque couleur de camp a une face (main), une tranche (dark) et un reflet (light). */
+/* Palette, reprise de « L'Avenir en commun » : violets, rouge, crème,
+   charbon, jaune, vert, bleu, rose. Les couleurs du décor (ciel, plateau,
+   brume) changent avec le thème Jour / Nuit : voir theme.js. Chaque
+   couleur de camp a une face (main), une tranche (dark) et un reflet (light). */
+const AEC = Object.freeze({
+  violet: '#4C0297', violet2: '#7b13d6', violetD: '#2c0159',
+  rouge: '#D1271C', rouge2: '#f91616', rougeF: '#8f1a12',
+  creme: '#FFFCF4', charbon: '#212320', jaune: '#f9c900', vert: '#2e9959', bleu: '#3885f4', rose: '#ed5fb1',
+});
 const PALETTE = Object.freeze({
-  skyTop: '#2a86bf',
-  skyHorizon: '#7cc4e6',
-  outsideFar: '#93c5dc',      // l'eau autour de l'arène
-  outsideNear: '#4f8fb0',
-  cliffLit: '#b9d6e0',        // la falaise au bord de l'arène, de la lumière à l'ombre
-  cliffShade: '#6f9cb0',
-  nearTint: 'rgba(120, 176, 204, 0.38)',   // voile bleuté du sol au premier plan
-  nearTintClear: 'rgba(120, 176, 204, 0)',
-  fog: 'rgba(240, 252, 255, 0.92)',
-  fogClear: 'rgba(240, 252, 255, 0)',
-  ground: '#eef9fc',          // clair de référence, pour détourer les textes
-  ink: '#23314f',
+  ink: AEC.charbon,
+  ground: AEC.creme,          // clair de référence, pour détourer les textes
   flash: '#ffffff',
-  player: Object.freeze({ main: '#f6bd0c', dark: '#c98f00', light: '#ffd84a', text: '#0a2124' }),
+  player: Object.freeze({ main: AEC.jaune, dark: '#b88f00', light: '#ffe066', text: AEC.charbon }),
   bots: Object.freeze([
-    Object.freeze({ main: '#2cc3c9', dark: '#1b98a0', light: '#62dde2', text: '#0a2124' }),
-    Object.freeze({ main: '#e8479b', dark: '#b82f76', light: '#f57bb9', text: '#0a2124' }),
-    Object.freeze({ main: '#8fd13f', dark: '#69a524', light: '#b0e56c', text: '#0a2124' }),
-    Object.freeze({ main: '#8d5ff0', dark: '#6740c4', light: '#ad8bf7', text: '#0a2124' }),
-    Object.freeze({ main: '#f28a1e', dark: '#c26608', light: '#f9ab58', text: '#0a2124' }),
-    Object.freeze({ main: '#ff6f61', dark: '#d2463a', light: '#ff9a90', text: '#0a2124' }),
-    Object.freeze({ main: '#4b8df8', dark: '#2d63c4', light: '#82b0fb', text: '#0a2124' }),
+    Object.freeze({ main: AEC.bleu, dark: '#1f5cb8', light: '#79acfa', text: '#ffffff' }),
+    Object.freeze({ main: AEC.rose, dark: '#b33a82', light: '#f594cc', text: AEC.charbon }),
+    Object.freeze({ main: AEC.vert, dark: '#1d6b3d', light: '#5fc188', text: '#ffffff' }),
+    Object.freeze({ main: AEC.violet2, dark: AEC.violetD, light: '#a456ea', text: '#ffffff' }),
+    Object.freeze({ main: AEC.rouge, dark: AEC.rougeF, light: '#ec5a50', text: '#ffffff' }),
+    Object.freeze({ main: '#f2802a', dark: '#b85712', light: '#f7a865', text: AEC.charbon }),
+    Object.freeze({ main: '#17ada3', dark: '#0d7a73', light: '#57d0c8', text: AEC.charbon }),
   ]),
 });
 /* Couleurs au choix du joueur en solo ; les adversaires prennent les autres. */
@@ -121,6 +148,9 @@ const SOLO_COLORS = Object.freeze([PALETTE.player, ...PALETTE.bots]);
 
 
 const PLAYER_NAME = 'Toi';
+
+/* Duel en ligne : la couleur de l'hôte, puis celle de son adversaire. */
+const DUEL_COLORS = Object.freeze([PALETTE.player, PALETTE.bots[0]]);
 
 /* Campagne « Crée ton parti » : cinq niveaux, chacun une mêlée générale où
    il faut posséder 51 % de l'arène. Les candidats deviennent des partis à
@@ -195,15 +225,15 @@ const TEAM_ROLE_NAMES = Object.freeze([
 const TEAMS = Object.freeze([
   Object.freeze({
     key: 'lfi', name: 'LFI',
-    colors: Object.freeze({ main: '#d23b30', dark: '#6f2a8f', light: '#ee7468', text: '#ffffff' }),
+    colors: Object.freeze({ main: AEC.rouge, dark: AEC.violet, light: '#ec5a50', text: '#ffffff' }),
   }),
   Object.freeze({
     key: 'renaissance', name: 'Renaissance',
-    colors: Object.freeze({ main: '#f8cb1c', dark: '#c79a00', light: '#ffe368', text: '#0a2124' }),
+    colors: Object.freeze({ main: AEC.jaune, dark: '#b88f00', light: '#ffe066', text: AEC.charbon }),
   }),
   Object.freeze({
     key: 'rn', name: 'RN',
-    colors: Object.freeze({ main: '#16296d', dark: '#0a1540', light: '#4862b8', text: '#ffffff' }),
+    colors: Object.freeze({ main: '#1a2f7a', dark: '#0a1540', light: '#4862b8', text: '#ffffff' }),
   }),
 ]);
 

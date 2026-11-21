@@ -38,8 +38,11 @@ function describeEntity(entity) {
   return { id: entity.id, landId: entity.landId, name: entity.name, isHuman: entity.isHuman, peer: entity.peer };
 }
 
-/* État d'une tête, en tableau pour alléger les messages. */
-function entityState(game, entity) {
+/* État d'une tête, en tableau pour alléger les messages. Une tête hors
+   de vue du camp destinataire n'a ni position ni cap : 2 = en vie, cachée. */
+function entityState(game, entity, hidden = false) {
+  const stats = entityStats(entity);
+  if (hidden) return [entity.id, entity.alive ? 2 : 0, 0, 0, 0, 0, entity.kills, 0, 0, 0, 0, 0, stats.kills, stats.deaths, stats.assists];
   return [
     entity.id,
     entity.alive ? 1 : 0,
@@ -53,7 +56,24 @@ function entityState(game, entity) {
     roundTo(entity.dashTime),
     entity.targetAngle === null ? 0 : 1,
     entity.halted ? 1 : 0,
+    stats.kills,
+    stats.deaths,
+    stats.assists,
   ];
+}
+
+/* Radars et éclaireurs d'un camp : [genre, x, y, rayon, âge, durée]. */
+function revealState(reveal) {
+  return [reveal.kind, roundTo(reveal.x), roundTo(reveal.y), reveal.radius, roundTo(reveal.age), reveal.duration];
+}
+
+/* Ce que le message 'start' décrit de la partie : format, carte et camps. */
+function describeMatch(game) {
+  return {
+    format: game.format,
+    arena: game.arenaInfo,
+    lands: game.lands.map((land) => ({ key: land.key, name: land.name, colors: land.colors })),
+  };
 }
 
 /* Événements utiles à l'affichage, les joueurs remplacés par leur numéro. */
@@ -69,15 +89,22 @@ function serializeEvent(event) {
     case 'recruit': return { type: 'recruit', entity: id(event.entity) };
     case 'dash': return { type: 'dash', entity: id(event.entity), power: roundTo(event.power) };
     case 'splash': return { type: 'splash', entity: id(event.entity), x: roundTo(event.x), y: roundTo(event.y) };
+    case 'reveal': return { type: 'reveal', kind: event.kind, entity: id(event.entity) };
     default: return null;
   }
 }
 
-/* Suivi de ce qui a déjà été envoyé. `collect(events)` à chaque image
-   (avant que la boucle ne vide game.events) ; `tick()` produit le message
-   suivant ; `start()` le tout premier, avec tout l'état. */
-function createHostSync(game) {
+/* Suivi de ce qui a déjà été envoyé à un groupe d'invités. `collect(events)`
+   à chaque image (avant que la boucle ne vide game.events) ; `tick()`
+   produit le message suivant ; `start()` le tout premier, avec tout l'état.
+   `vision` (en équipes, voir vision.js) : le groupe est un camp, qui ne
+   reçoit que ce qu'il voit : la carte qu'il connaît, les têtes et les
+   traînées en vue, ses propres radars. Sans `vision`, tout est envoyé. */
+function createHostSync(game, vision = null) {
   const sentOwner = new Uint8Array(game.grid.owner.length);
+  const ownerSource = () => (vision ? vision.known.owner : game.grid.owner);
+  const isHidden = (entity) => Boolean(vision && vision.hidden.has(entity.id));
+  const isTrailHidden = (entity) => Boolean(vision && vision.trailHidden.has(entity.id));
   const sentTrails = new Map();   // identifiant -> { points (le tableau envoyé), length }
   let sentEntities = 0;
   let pendingEvents = [];
@@ -86,7 +113,8 @@ function createHostSync(game) {
   function trailChanges() {
     const changes = [];
     for (const entity of game.entities) {
-      const points = entity.trailPoints;
+      // Traînée hors de vue : vidée chez l'invité, renvoyée en entier quand elle réapparaît.
+      const points = isTrailHidden(entity) ? [] : entity.trailPoints;
       const sent = sentTrails.get(entity.id);
       const isNew = !sent || sent.points !== points || points.length < sent.length;
       const from = isNew ? 0 : sent.length;
@@ -104,12 +132,13 @@ function createHostSync(game) {
     sentEntities = game.entities.length;
     const message = {
       type: 'state',
-      cells: diffOwners(game.grid.owner, sentOwner),
+      cells: diffOwners(ownerSource(), sentOwner),
       added,
-      entities: game.entities.map((entity) => entityState(game, entity)),
+      entities: game.entities.map((entity) => entityState(game, entity, isHidden(entity))),
       trails: trailChanges(),
       events: pendingEvents,
-      projectiles: game.projectiles.map((bomb) => [
+      reveals: vision ? game.reveals.filter((reveal) => reveal.landId === vision.landId).map(revealState) : [],
+      projectiles: game.projectiles.filter((bomb) => !isHidden(bomb.entity)).map((bomb) => [
         bomb.entity.id, roundTo(bomb.fromX), roundTo(bomb.fromY), roundTo(bomb.toX), roundTo(bomb.toY),
         roundTo(bomb.age), bomb.duration,
       ]),
@@ -125,11 +154,16 @@ function createHostSync(game) {
   return {
     collect(events) {
       for (const event of events) {
+        // Ce qui se passe hors de vue n'est pas montré ; les éliminations
+        // restent annoncées (fil des éliminations), sans leur position.
+        if (vision && event.type !== 'death' && event.type !== 'region' && event.entity && isHidden(event.entity)) continue;
+        if (vision && event.type === 'region' && event.landId !== vision.landId) continue;
         const serialized = serializeEvent(event);
+        if (serialized && vision && event.type === 'death' && !isVisibleAt(vision, event.x, event.y)) serialized.hidden = 1;
         if (serialized) pendingEvents.push(serialized);
       }
     },
-    start: () => ({ type: 'start', lands: game.lands.map((land) => land.key), state: tick() }),
+    start: () => ({ type: 'start', ...describeMatch(game), fog: Boolean(vision), state: tick() }),
     tick,
   };
 }
@@ -145,6 +179,8 @@ function applyGuestCommand(game, peer, command) {
     if (command.kind === 'boost') useBoost(game, entity);
     else if (command.kind === 'bomb') useBomb(game, entity);
     else if (command.kind === 'dash' && typeof command.angle === 'number') useDash(game, entity, command.angle);
+    else if (command.kind === 'radar') useRadar(game, entity);
+    else if (command.kind === 'scout') useScout(game, entity);
   }
 }
 
@@ -153,9 +189,11 @@ function applyGuestCommand(game, peer, command) {
 /* Crée le miroir à partir du message 'start'. `peer` : identifiant de cet
    invité, pour reconnaître son propre joueur. */
 function createMirror(start, peer) {
-  const arena = CONFIG.arenas.team;
+  const arena = start.arena;
   const game = {
     mode: 'online',
+    format: start.format,
+    arenaInfo: arena,
     mirror: true,
     round: 1,
     grid: createGrid(arena.size, CONFIG.resolution, ARENA_SHAPES[arena.shape](arena.size, arena)),
@@ -163,6 +201,8 @@ function createMirror(start, peer) {
     entities: [],
     player: null,
     projectiles: [],
+    reveals: [],
+    stats: createStats(),
     events: [],
     startCells: 0,
     ending: null,
@@ -171,10 +211,7 @@ function createMirror(start, peer) {
     unranked: true,
     peer,
   };
-  for (const key of start.lands) {
-    const team = TEAMS.find((item) => item.key === key);
-    createLand(game, team.name, team.colors, team.key);
-  }
+  for (const land of start.lands) createLand(game, land.name, land.colors, land.key);
   applyState(game, start.state);
   return game;
 }
@@ -195,8 +232,15 @@ function applyState(game, state) {
   }
   for (const description of state.added) addMirrorEntity(game, description);
 
-  for (const [id, alive, x, y, angle, speed, kills, charges, boostTime, dashTime, moving, halted] of state.entities) {
+  for (const [id, alive, x, y, angle, speed, kills, charges, boostTime, dashTime, moving, halted, k, d, a] of state.entities) {
     const entity = game.entities[id - 1];
+    entity.stats = { kills: k || 0, deaths: d || 0, assists: a || 0 };
+    // Tête hors de vue (2) : on ne sait rien de plus ; elle reste où on l'a vue.
+    entity.hidden = alive === 2;
+    if (entity.hidden) {
+      Object.assign(entity, { alive: true, kills, netSpeed: 0 });
+      continue;
+    }
     const respawned = alive && !entity.alive;
     Object.assign(entity, {
       alive: Boolean(alive), netX: x, netY: y, netAngle: angle, netSpeed: speed, netAge: 0,
@@ -225,6 +269,10 @@ function applyState(game, state) {
     game.events.push(restored);
   }
 
+  game.reveals = (state.reveals || []).map(([kind, x, y, radius, age, duration]) => ({
+    kind, x, y, radius, age, duration, landId: game.player ? game.player.landId : 0,
+  }));
+
   game.projectiles = state.projectiles.map(([id, fromX, fromY, toX, toY, age, duration]) => ({
     entity: game.entities[id - 1], fromX, fromY, toX, toY, age, duration,
   }));
@@ -239,7 +287,7 @@ function updateMirror(game, dt) {
   const { smoothing, extrapolateMax } = CONFIG.online;
   const blend = Math.min(1, smoothing * dt);
   for (const entity of game.entities) {
-    if (!entity.alive) continue;
+    if (!entity.alive || entity.hidden) continue;
     entity.netAge += dt;
     const ahead = entity.netSpeed * Math.min(entity.netAge, extrapolateMax);
     const targetX = entity.netX + Math.cos(entity.netAngle) * ahead;
@@ -250,6 +298,8 @@ function updateMirror(game, dt) {
     entity.angle += turn * blend;
   }
   for (const bomb of game.projectiles) bomb.age = Math.min(bomb.duration, bomb.age + dt);
+  for (const reveal of game.reveals) reveal.age += dt;
+  tickStats(game, dt, true);
   // Comme chez l'hôte : le bilan s'affiche un court instant après la fin.
   if (game.ending && !game.over) {
     game.ending.timer -= dt;
@@ -267,7 +317,31 @@ function isOnlineWin(game) {
 /* Le salon, tenu par l'hôte : les joueurs humains, leur nom et leur camp.
    `players` : [{ peer, name, teamKey, isHost }], l'hôte en premier. */
 function createLobby(host) {
-  return { players: [{ ...host, peer: 'host', isHost: true }] };
+  return { players: [{ ...host, peer: 'host', isHost: true }], match: { format: 'teams', map: 'france', rules: 'zones' } };
+}
+
+/* Réglages de la partie, choisis par l'hôte : format ('teams' ou 'duel'),
+   carte (clé de CONFIG.maps) et règles ('normal' : Paper.io classique,
+   'zones' : les zones tenues à 70 % se complètent). Renvoie vrai si
+   quelque chose a changé ; refuse le duel s'il y a déjà plus de deux joueurs. */
+function lobbySetMatch(lobby, patch) {
+  const next = { ...lobby.match, ...patch };
+  if (!['teams', 'duel'].includes(next.format) || !CONFIG.maps[next.map] || !['normal', 'zones'].includes(next.rules)) return false;
+  if (next.format === 'duel' && lobby.players.length > 2) return false;
+  const changed = JSON.stringify(next) !== JSON.stringify(lobby.match);
+  lobby.match = next;
+  return changed;
+}
+
+function lobbyCapacity(lobby) {
+  return lobby.match && lobby.match.format === 'duel' ? 2 : CONFIG.online.maxHumans;
+}
+
+/* Arène d'une partie lancée depuis le salon. */
+function matchArena(match) {
+  const map = CONFIG.maps[match.map];
+  const zones = match.rules === 'zones' ? map.zones : false;
+  return { shape: map.shape, size: match.format === 'duel' ? map.duel : map.teams, zones: map.shape === 'france' && zones ? undefined : zones };
 }
 
 /* Nom tapé par un joueur : espaces resserrés, 16 caractères au plus. */
@@ -288,7 +362,7 @@ function emptiestTeam(lobby) {
 /* Un invité arrive. Renvoie null, ou la raison du refus : 'full'. */
 function lobbyJoin(lobby, peer, name, teamKey) {
   if (lobby.players.some((player) => player.peer === peer)) return null;
-  if (lobby.players.length >= CONFIG.online.maxHumans) return 'full';
+  if (lobby.players.length >= lobbyCapacity(lobby)) return 'full';
   const wanted = TEAMS.some((team) => team.key === teamKey) && teamCount(lobby, teamKey) < CONFIG.online.maxPerTeam;
   lobby.players.push({ peer, name: cleanPlayerName(name), teamKey: wanted ? teamKey : emptiestTeam(lobby), isHost: false });
   return null;

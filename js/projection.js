@@ -48,8 +48,15 @@ function createProjection() {
   };
 
   /* Zoom : la caméra s'approche ou s'éloigne du point suivi, sans changer d'angle. */
+  let minZoom = CAMERA.minZoom;
   projection.zoomBy = (factor) => {
-    projection.zoom = Math.max(CAMERA.minZoom, Math.min(CAMERA.maxZoom, projection.zoom * factor));
+    projection.zoom = Math.max(minZoom, Math.min(CAMERA.maxZoom, projection.zoom * factor));
+  };
+
+  /* Dézoom maximal, selon la taille de l'arène : assez pour la voir en entier. */
+  projection.setMinZoom = (zoom) => {
+    minZoom = Math.min(CAMERA.minZoom, zoom);
+    projection.zoom = Math.max(minZoom, projection.zoom);
   };
 
   /* Inclinaison : la caméra tourne autour du point suivi, de la vue rasante
@@ -112,11 +119,11 @@ function createProjection() {
   /* Ligne du sol (hauteur 0) visible sur une ligne de l'écran : sa distance
      `ahead` devant la caméra et l'échelle `scale` (pixels par unité) à
      cette distance. Renvoie null au-dessus de l'horizon. */
-  projection.groundRow = (screenY) => {
+  projection.groundRow = (screenY, z = 0) => {
     const slope = (projection.centerY - screenY) / projection.focal;
     const denominator = sin - slope * cos;
     if (denominator <= 1e-4) return null;
-    const depth = projection.z / denominator;
+    const depth = (projection.z - z) / denominator;
     return { ahead: depth * (cos + slope * sin), scale: projection.focal / depth };
   };
 

@@ -4,16 +4,18 @@
    partie, fin de partie ou de niveau. Le DOM n'est modifié que lorsqu'une
    valeur change réellement. Les textes se veulent drôles, jamais méchants. */
 
-/* Tête de mort du compteur d'éliminations, en cases comme le logo. */
-const SKULL_GLYPH = Object.freeze(['.11111.', '1111111', '1..1..1', '1111111', '.11111.', '.1.1.1.']);
 
 /* Compétences, dans l'ordre des boutons. `key` : touche affichée sur ordinateur. */
 /* `icon` : tracé SVG dans une case de 24, dessiné au trait.
    `aimed` : se vise bouton enfoncé, part au relâchement. */
+/* `vision` : compétence de vision, en équipes seulement ; elle se recharge
+   avec le temps (CONFIG.vision), pas avec les charges. */
 const ABILITIES = Object.freeze([
   { kind: 'boost', label: 'Boost', key: 'Espace', icon: 'M5 6l6 6-6 6M13 6l6 6-6 6' },
   { kind: 'dash', label: 'Dash', hint: 'vise, lâche', key: 'E', aimed: true, icon: 'M3 12h12M11 7l5 5-5 5M20 5v14' },
   { kind: 'bomb', label: 'Bombe', key: 'R', icon: 'M12 3.5c3.2 4 5.5 6.8 5.5 10a5.5 5.5 0 0 1-11 0c0-3.2 2.3-6 5.5-10z' },
+  { kind: 'radar', label: 'Radar', key: 'V', vision: true, icon: 'M12 12l6-6M12 4a8 8 0 1 0 8 8M12 8a4 4 0 1 0 4 4' },
+  { kind: 'scout', label: 'Éclaireur', key: 'B', vision: true, icon: 'M12 4l8 8-8 8-8-8zM12 9v6M9 12h6' },
 ]);
 
 /* État d'une compétence pour le joueur :
@@ -22,6 +24,10 @@ const ABILITIES = Object.freeze([
    - 'charging' : `progress` = avancement vers la disponibilité. */
 function getAbilityState(game, kind) {
   const player = game.player;
+  if (kind === 'radar' || kind === 'scout') {
+    const remaining = visionCooldown(player, kind);
+    return { state: remaining > 0 ? 'charging' : 'ready', progress: 1 - remaining / CONFIG.vision[kind].cooldown };
+  }
   const settings = CONFIG.abilities[kind];
   if (kind === 'boost' && player.boostTime > 0) {
     return { state: 'active', progress: Math.min(1, player.boostTime / settings.duration) };
@@ -81,7 +87,7 @@ const DIFFICULTY_NOTES = Object.freeze({
 });
 
 /* Noms des couleurs au choix en solo, dans l'ordre de SOLO_COLORS. */
-const COLOR_NAMES = Object.freeze(['Soleil', 'Lagon', 'Fuchsia', 'Pomme', 'Lavande', 'Mandarine', 'Corail', 'Azur']);
+const COLOR_NAMES = Object.freeze(['Jaune', 'Bleu', 'Rose', 'Vert', 'Violet', 'Rouge', 'Orange', 'Turquoise']);
 
 /* Campagne : titres de victoire par niveau, et mots de consolation. */
 const LEVEL_WON_TITLES = Object.freeze(['Quartier remporté !', 'Ville remportée !', 'Département remporté !', 'Région remportée !', 'Élu·e !']);
@@ -108,24 +114,20 @@ function formatPercent(share) {
   return `${(share * 100).toFixed(2).replace('.', ',')} %`;
 }
 
-function buildSkull(container) {
-  const unit = 2;
-  const rects = [];
-  SKULL_GLYPH.forEach((row, y) => {
-    [...row].forEach((mark, x) => {
-      if (mark === '1') rects.push(`<rect x="${x * unit}" y="${y * unit}" width="${unit}" height="${unit}"/>`);
-    });
-  });
-  container.innerHTML =
-    `<svg viewBox="0 0 ${SKULL_GLYPH[0].length * unit} ${SKULL_GLYPH.length * unit}" shape-rendering="crispEdges" aria-hidden="true">${rects.join('')}</svg>`;
-}
 
 /* `onCampaign(fresh)` : lancer ou reprendre la campagne ; `onTeam(teamKey)` :
    jouer en équipes ; `onPrimary` : bouton principal de l'écran de fin.
    `pause` : { open, resume, rename, color(index), difficulty(key), team(key),
    campaign } , les commandes de l'écran de pause. */
+/* Chiffres des taux par seconde : deux décimales, virgule française. */
+function formatRate(value, unit) {
+  const sign = value > 0.0005 ? '+' : value < -0.0005 ? '−' : '';
+  return `${sign}${Math.abs(value).toFixed(2).replace('.', ',')}${unit}`;
+}
+
 function createUI({
   onCampaign, onTeam, onDifficulty, onPrimary, onMenu, onAbility, onAbilityEnd, onAim, onResetCamera, pause, settings, online,
+  onTheme, onCamera, onScoreboard,
 }) {
   const byId = (id) => document.getElementById(id);
   const elements = {
@@ -204,10 +206,22 @@ function createUI({
     overBest: byId('over-best'),
     overRecord: byId('over-record'),
     primary: byId('btn-primary'),
+    progress: byId('team-progress'),
+    killfeed: byId('killfeed'),
+    scoreboard: byId('scoreboard'),
+    scoreboardBody: byId('scoreboard-body'),
+    scoreboardTitle: byId('scoreboard-title'),
+    cameraButton: byId('btn-camera'),
+    cameraChip: byId('camera-chip'),
+    themeButtons: [...document.querySelectorAll('[data-theme-toggle]')],
+    lobbyMatch: [...document.querySelectorAll('[data-match]')],
+    lobbyMatchNote: byId('lobby-match-note'),
+    lobbyTeamsGroup: byId('lobby-teams-group'),
+    lobbyPlayersHint: byId('lobby-players-hint'),
   };
   const usesTouch = window.matchMedia('(pointer: coarse)').matches;
   const screens = [elements.home, elements.pick, elements.pause, elements.settingsScreen, elements.join, elements.lobby, elements.over];
-  const playOnly = [elements.hud, elements.abilities, elements.minimap, elements.compass, elements.hint];
+  const playOnly = [elements.hud, elements.abilities, elements.minimap, elements.compass, elements.hint, elements.killfeed, elements.scoreboard, elements.cameraChip];
   let lastTeamKey = null;
   let hasSavedCampaign = false;
   let picker = null;            // choix de nom en cours : { onPick, onReroll, onBack }
@@ -215,8 +229,11 @@ function createUI({
   let regionRefreshAt = 0;      // prochaine mise à jour de la ligne « région », en millisecondes
   let completeRegions = new Int32Array(256);   // régions entièrement tenues par chaque camp
   const celebrateUntil = new Map();            // camp -> fin de la mise en avant de sa ligne, en millisecondes
+  let progressRefreshAt = 0;                   // prochaine mise à jour du panneau de progression
+  const shownRates = new Map();                // camp -> taux affichés, lissés
+  let scoreboardRefreshAt = 0;
+  let fog = null;                              // brouillard de la partie en cours, ou null
 
-  buildSkull(byId('hud-skull'));
   buildTeamButtons();
   const pauseTeamButtons = buildPauseTeams();
   const swatches = buildSwatches();
@@ -278,6 +295,14 @@ function createUI({
   elements.primary.addEventListener('click', onPrimary);
   byId('btn-menu').addEventListener('click', onMenu);
   elements.compass.addEventListener('click', onResetCamera);
+  for (const button of elements.themeButtons) button.addEventListener('click', onTheme);
+  elements.cameraButton.addEventListener('click', onCamera);
+  byId('btn-camera-back').addEventListener('click', onCamera);
+  byId('btn-scoreboard').addEventListener('click', () => onScoreboard(elements.scoreboard.hidden));
+  byId('btn-scoreboard-close').addEventListener('click', () => onScoreboard(false));
+  for (const option of elements.lobbyMatch) {
+    option.addEventListener('click', () => online.setMatch({ [option.dataset.match]: option.dataset.value }));
+  }
 
   function setText(element, text) {
     if (element.textContent !== text) element.textContent = text;
@@ -393,6 +418,7 @@ function createUI({
      la couleur et le nom du joueur ont pu changer. */
   function resumePlaying(game) {
     for (const element of screens) element.hidden = true;
+    elements.killfeed.hidden = false;
     elements.hud.hidden = false;
     elements.abilities.hidden = false;
     elements.minimap.hidden = false;
@@ -439,7 +465,14 @@ function createUI({
   const setJoinStatus = (text, tone) => setStatus(elements.joinStatus, text, tone);
   const setLobbyStatus = (text, tone) => setStatus(elements.lobbyStatus, text, tone);
 
-  /* `view` : { code, isHost, me, players, status, tone }. */
+  const MATCH_NOTES = Object.freeze({
+    teams: 'Trois camps, des IA aux places libres, brouillard de guerre : tu ne vois que ce que ton camp voit.',
+    duel: 'Toi contre un copain, sans IA. Premier à 51 % de l\'arène.',
+    normal: 'Règles classiques : entoure, capture, coupe les lignes.',
+    zones: 'La carte est découpée en zones : tiens-en 70 % et le reste est à toi.',
+  });
+
+  /* `view` : { code, isHost, me, players, match, status, tone }. */
   function showLobby(view) {
     if (elements.lobby.hidden) {
       showScreen(elements.lobby);
@@ -449,6 +482,17 @@ function createUI({
     setText(elements.lobbyHint, view.isHost
       ? 'Tes copains ouvrent le lien, ou tapent ce code dans « Rejoindre ». Garde le jeu ouvert : ton appareil fait tourner la partie.'
       : 'Choisis ton camp ; l\'hôte lance la partie quand tout le monde est là.');
+    const match = view.match || { format: 'teams', map: 'france', rules: 'zones' };
+    const isDuel = match.format === 'duel';
+    for (const option of elements.lobbyMatch) {
+      option.setAttribute('aria-checked', String(match[option.dataset.match] === option.dataset.value));
+      option.disabled = !view.isHost || (option.dataset.value === 'duel' && view.players.length > 2);
+    }
+    setText(elements.lobbyMatchNote, `${MATCH_NOTES[match.format]} ${MATCH_NOTES[match.rules]}`);
+    elements.lobbyTeamsGroup.hidden = isDuel;
+    setText(elements.lobbyPlayersHint, isDuel
+      ? (view.players.length < 2 ? 'Il manque ton adversaire : envoie-lui le lien.' : 'Prêts pour le duel.')
+      : 'Places libres : des IA. Trois humains par camp au plus.');
     const me = view.players.find((player) => player.peer === view.me);
     for (const button of lobbyTeamButtons) {
       const team = TEAMS.find((item) => item.key === button.dataset.team);
@@ -457,9 +501,10 @@ function createUI({
       button.classList.toggle('is-current', Boolean(me) && me.teamKey === team.key);
       button.classList.toggle('is-full', count >= CONFIG.online.maxPerTeam && !(me && me.teamKey === team.key));
     }
-    setText(elements.lobbyPlayersTitle, `Joueurs · ${view.players.length}/${CONFIG.online.maxHumans}`);
-    elements.lobbyPlayers.replaceChildren(...view.players.map((player) => {
-      const team = TEAMS.find((item) => item.key === player.teamKey);
+    setText(elements.lobbyPlayersTitle, `Joueurs · ${view.players.length}/${isDuel ? 2 : CONFIG.online.maxHumans}`);
+    elements.lobbyPlayers.replaceChildren(...view.players.map((player, index) => {
+      const team = isDuel ? { name: index === 0 ? 'J1' : 'J2', colors: DUEL_COLORS[index] || DUEL_COLORS[1] }
+        : TEAMS.find((item) => item.key === player.teamKey);
       const item = document.createElement('li');
       paintSlab(item, team.colors);
       item.classList.toggle('is-me', player.peer === view.me);
@@ -479,7 +524,7 @@ function createUI({
       return item;
     }));
     elements.lobbyStart.hidden = !view.isHost;
-    elements.lobbyStart.disabled = !view.code;
+    elements.lobbyStart.disabled = !view.code || (isDuel && view.players.length < 2);
     setLobbyStatus(view.status || (view.isHost ? '' : 'En attente de l\'hôte…'), view.tone);
   }
 
@@ -566,6 +611,194 @@ function createUI({
     paintSlab(elements.abilities, playerLand(game).colors);
     rankingSignature = '';
     resetAbilityControls();
+    const teams = isTeamMode(game);
+    for (const control of abilityControls.buttons) control.button.hidden = Boolean(control.ability.vision) && !teams;
+    elements.progress.hidden = !teams;
+    elements.killfeed.hidden = false;
+    elements.killfeed.replaceChildren();
+    elements.scoreboard.hidden = true;
+    shownRates.clear();
+    progressRefreshAt = 0;
+    showFreeCamera(false);
+  }
+
+  /* --- Thème, caméra libre ------------------------------------------- */
+
+  function showTheme(key) {
+    for (const button of elements.themeButtons) {
+      button.dataset.current = key;
+      button.setAttribute('aria-label', key === 'day' ? 'Passer en mode Nuit' : 'Passer en mode Jour');
+      button.title = button.getAttribute('aria-label');
+    }
+  }
+
+  function showFreeCamera(free) {
+    elements.cameraButton.setAttribute('aria-pressed', String(free));
+    elements.cameraChip.hidden = !free;
+  }
+
+  /* --- Fil des éliminations ------------------------------------------ */
+
+  /* « Auteur ✕ Victime », aux couleurs des camps ; quatre lignes au plus,
+     chacune s'efface au bout de quelques secondes (voir le CSS). */
+  function addKillLine(game, event) {
+    const item = document.createElement('li');
+    const who = (entity, fallback) => {
+      const span = document.createElement('span');
+      span.className = 'kill-name';
+      span.textContent = entity ? entity.name : fallback;
+      if (entity) paintSlab(span, entity.colors);
+      if (entity && entity === game.player) span.classList.add('is-me');
+      return span;
+    };
+    const mark = document.createElement('span');
+    mark.className = 'kill-mark';
+    mark.textContent = event.reason === 'self' ? 'se coupe' : '✕';
+    if (event.reason === 'self' || !event.killer) item.append(who(event.entity), mark);
+    else item.append(who(event.killer), mark, who(event.entity));
+    item.addEventListener('animationend', () => item.remove());
+    elements.killfeed.prepend(item);
+    while (elements.killfeed.children.length > 4) elements.killfeed.lastChild.remove();
+  }
+
+  /* --- Classement complet (Tab) --------------------------------------- */
+
+  function landShareText(game, land, totalCells) {
+    if (fog && land.id !== game.player.landId) return '?';
+    return formatShare(getLandCells(game, land), totalCells);
+  }
+
+  /* Un bloc par camp, du plus grand au plus petit, puis ses joueurs, du
+     meilleur K / D / A au moins bon. En équipes, la surface des camps
+     adverses est cachée. */
+  function renderScoreboard(game) {
+    const totalCells = game.grid.playableCount;
+    const lands = [...game.lands].sort((a, b) => getLandCells(game, b) - getLandCells(game, a));
+    // Chacun pour soi (solo, duel) : un seul tableau, une ligne par camp.
+    if (game.entities.length === game.lands.length) {
+      elements.scoreboardBody.replaceChildren(soloBoard(game, lands, totalCells));
+      return;
+    }
+    const blocks = lands.map((land) => {
+      const members = game.entities.filter((entity) => entity.landId === land.id)
+        .sort((a, b) => entityStats(b).kills - entityStats(a).kills || entityStats(b).assists - entityStats(a).assists);
+      if (members.length === 0) return null;
+      const block = document.createElement('section');
+      block.className = 'board-land';
+      paintSlab(block, land.colors);
+      const head = document.createElement('header');
+      const name = document.createElement('span');
+      name.textContent = land.name;
+      const share = document.createElement('span');
+      share.className = 'board-share';
+      share.textContent = landShareText(game, land, totalCells);
+      head.append(name, share);
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th scope="col">Joueur</th><th scope="col" title="Éliminations">K</th><th scope="col" title="Morts">D</th><th scope="col" title="Assists">A</th></tr></thead>';
+      const body = document.createElement('tbody');
+      for (const entity of members) {
+        const stats = entityStats(entity);
+        const row = document.createElement('tr');
+        row.classList.toggle('is-me', entity === game.player);
+        row.classList.toggle('is-out', !entity.alive);
+        const cell = (text) => {
+          const td = document.createElement('td');
+          td.textContent = text;
+          return td;
+        };
+        const label = entity.isHuman && !entity.isPlayer && game.mode === 'online' ? `${entity.name} · humain` : entity.name;
+        row.append(cell(label), cell(String(stats.kills)), cell(String(stats.deaths)), cell(String(stats.assists)));
+        body.append(row);
+      }
+      table.append(body);
+      block.append(head, table);
+      return block;
+    }).filter(Boolean);
+    elements.scoreboardBody.replaceChildren(...blocks);
+  }
+
+  function soloBoard(game, lands, totalCells) {
+    const table = document.createElement('table');
+    table.className = 'board-solo';
+    table.innerHTML = '<thead><tr><th scope="col">Joueur</th><th scope="col">Part</th><th scope="col" title="Éliminations">K</th><th scope="col" title="Morts">D</th><th scope="col" title="Assists">A</th></tr></thead>';
+    const body = document.createElement('tbody');
+    for (const land of lands) {
+      const entity = game.entities.find((item) => item.landId === land.id);
+      const stats = entityStats(entity);
+      const row = document.createElement('tr');
+      row.classList.toggle('is-me', entity === game.player);
+      row.classList.toggle('is-out', !entity.alive);
+      const name = document.createElement('td');
+      const swatch = document.createElement('span');
+      swatch.className = 'board-swatch';
+      paintSlab(swatch, land.colors);
+      name.append(swatch, land.name);
+      row.append(name);
+      for (const text of [landShareText(game, land, totalCells), stats.kills, stats.deaths, stats.assists]) {
+        const td = document.createElement('td');
+        td.textContent = String(text);
+        row.append(td);
+      }
+      body.append(row);
+    }
+    table.append(body);
+    const block = document.createElement('section');
+    block.className = 'board-land';
+    block.append(table);
+    return block;
+  }
+
+  function setScoreboard(game, open) {
+    elements.scoreboard.hidden = !open;
+    if (open) {
+      scoreboardRefreshAt = 0;
+      setText(elements.scoreboardTitle, isTeamMode(game) ? 'Classement · équipes' : 'Classement');
+      renderScoreboard(game);
+    }
+  }
+
+  /* --- Progression des équipes ---------------------------------------- */
+
+  /* Par camp : sa part, et ses taux par seconde (moyenne glissante, voir
+     stats.js), lissés à l'affichage. Les chiffres d'un camp adverse hors
+     de vue sont cachés, sauf ses éliminations et ses morts, annoncées à tous. */
+  function updateProgress(game, dt) {
+    if (elements.progress.hidden) return;
+    for (const land of game.lands) {
+      const target = landRates(game, land.id);
+      const shown = shownRates.get(land.id) || { share: 0, kills: 0, deaths: 0 };
+      for (const key of ['share', 'kills', 'deaths']) shown[key] = easeValue(shown[key], target[key], dt);
+      shownRates.set(land.id, shown);
+    }
+    if (performance.now() < progressRefreshAt) return;
+    progressRefreshAt = performance.now() + 250;
+    const totalCells = game.grid.playableCount;
+    const rows = game.lands.map((land) => {
+      const rates = shownRates.get(land.id);
+      const hidden = fog && land.id !== game.player.landId;
+      const item = document.createElement('li');
+      paintSlab(item, land.colors);
+      item.classList.toggle('is-player', land.id === game.player.landId);
+      const name = document.createElement('span');
+      name.className = 'progress-name';
+      name.textContent = land.name;
+      const share = document.createElement('span');
+      share.className = 'progress-share';
+      share.textContent = hidden ? '?' : formatShare(getLandCells(game, land), totalCells);
+      const rate = (text, title) => {
+        const span = document.createElement('span');
+        span.className = 'progress-rate';
+        span.textContent = text;
+        span.title = title;
+        return span;
+      };
+      item.append(name, share,
+        rate(hidden ? '? %/s' : formatRate(rates.share * 100, ' %/s'), 'Part d\'arène gagnée par seconde (moyenne sur 10 s)'),
+        rate(formatRate(rates.kills, ' K/s').replace('+', ''), 'Éliminations par seconde (moyenne sur 10 s)'),
+        rate(formatRate(rates.deaths, ' D/s').replace('+', ''), 'Morts par seconde (moyenne sur 10 s)'));
+      return item;
+    });
+    elements.progress.replaceChildren(...rows);
   }
 
   /* --- Régions ------------------------------------------------------ */
@@ -593,12 +826,13 @@ function createUI({
   function handleEvents(game) {
     if (!game.player) return;
     for (const event of game.events) {
+      if (event.type === 'death') addKillLine(game, event);
       // En Normal, le joueur éliminé revient : on le lui dit.
       if (event.type === 'death' && event.entity === game.player && !game.ending) {
         announce(`Tombé·e ! Retour dans ${CONFIG.botRespawnDelay} s`);
         continue;
       }
-      if (event.type !== 'region') continue;
+      if (event.type !== 'region' || (fog && event.landId !== game.player.landId)) continue;
       celebrateUntil.set(event.landId, performance.now() + 2500);
       regionRefreshAt = 0;
       if (event.landId === game.player.landId) announce(`${ZONE_KINDS[game.grid.zoneKind].done}\u00a0: ${event.name}\u00a0!`);
@@ -652,7 +886,7 @@ function createUI({
         '<circle class="ring-track" cx="26" cy="26" r="24"/>' +
         '<circle class="ring-fill" cx="26" cy="26" r="24" pathLength="100"/></svg>' +
         `<svg class="ability-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${ability.icon}"/></svg>`;
-      const cost = CONFIG.abilities[ability.kind].cost;
+      const cost = ability.vision ? 0 : CONFIG.abilities[ability.kind].cost;
       if (cost > 0) {
         const badge = document.createElement('span');
         badge.className = 'ability-cost';
@@ -787,7 +1021,7 @@ function createUI({
     name.className = 'ranking-name';
     name.textContent = row.land.name;
     const share = document.createElement('span');
-    share.textContent = formatShare(row.cells, totalCells);
+    share.textContent = fog && !row.land.isPlayerLand ? '?' : formatShare(row.cells, totalCells);
     item.append(rank, name, share);
     if (row.regions > 0) {
       const regions = document.createElement('span');
@@ -809,15 +1043,24 @@ function createUI({
     elements.ranking.replaceChildren(...rows.map((row) => rankingItem(row, totalCells, game.grid.zoneKind)));
   }
 
-  function updateHud(game, bestShare) {
+  /* `vision` : brouillard du camp (en équipes), ou null. */
+  function updateHud(game, bestShare, dt = 0, vision = null) {
+    fog = vision;
     const player = game.player;
-    if (!player || !player.alive) return;
+    if (!player) return;
+    const stats = entityStats(player);
+    setText(elements.kills, `${stats.kills}/${stats.deaths}/${stats.assists}`);
+    updateProgress(game, dt);
+    if (!elements.scoreboard.hidden && performance.now() >= scoreboardRefreshAt) {
+      scoreboardRefreshAt = performance.now() + 500;
+      renderScoreboard(game);
+    }
+    if (!player.alive) return;
     const totalCells = game.grid.playableCount;
     const cells = getLandCells(game, playerLand(game));
     setText(elements.share, formatShare(cells, totalCells));
     setText(elements.score, String(cellsToScore(game, cells)));
     setText(elements.best, bestShare > 0 ? formatPercent(Math.max(bestShare, cells / totalCells)) : '—');
-    setText(elements.kills, String(player.kills));
     updateRanking(game, totalCells);
     updateRegion(game);
     updateAbilities(game);
@@ -872,12 +1115,13 @@ function createUI({
     const ending = game.ending;
     if (game.mode === 'online') {
       const won = isOnlineWin(game);
+      const where = game.format === 'duel' ? 'de l\'arène' : 'de la carte';
       return {
         title: won ? 'Élu·e !' : 'Battu·e…',
         tone: won ? 'win' : 'lose',
         message: won
-          ? `Ton camp atteint 51 % de la France. ${pickLine(LEVEL_WON_JOKES)}`
-          : `${ending.winnerName} atteint 51 % de la France. ${pickLine(CONSOLATIONS)}`,
+          ? `${game.format === 'duel' ? 'Tu atteins' : 'Ton camp atteint'} 51 % ${where}. ${pickLine(LEVEL_WON_JOKES)}`
+          : `${ending.winnerName} atteint 51 % ${where}. ${pickLine(CONSOLATIONS)}`,
         primary: 'Revenir au salon',
         standings: 'Résultats',
       };
@@ -952,7 +1196,8 @@ function createUI({
     elements.primary.hidden = false;
     if (game.mode === 'solo') renderSteps(elements.overSteps, game.level, ending.won);
     showStandings(ending.standings, totalCells);
-    setText(elements.overKills, String(ending.kills));
+    const stats = entityStats(game.player);
+    setText(elements.overKills, `${stats.kills}/${stats.deaths}/${stats.assists}`);
     setText(elements.overScore, String(cellsToScore(game, ending.cells)));
     setText(elements.overBest, bestShare > 0 ? formatPercent(bestShare) : '—');
     elements.overRecord.hidden = !isNewRecord;
@@ -963,5 +1208,6 @@ function createUI({
     showHome, confirmHome, showPicker, showPlaying, showPause, resumePlaying, updateHud, updateCompass,
     handleEvents, announce, showGameOver, showSettings, applySettings,
     showJoin, setJoinStatus, showLobby, setLobbyStatus, showOnlineNotice,
+    showTheme, showFreeCamera, setScoreboard, isScoreboardOpen: () => !elements.scoreboard.hidden,
   };
 }

@@ -4,8 +4,9 @@
    montre toute l'arène, un pixel par unité, et la position du joueur. */
 
 const MINIMAP_REFRESH = 0.25;   // secondes entre deux mises à jour
-const LAND_RGB = [238, 249, 252];   // sol libre
-const BORDER_RGB = [176, 208, 222]; // limite entre deux régions
+const LAND_RGB = [246, 242, 252];   // sol libre
+const BORDER_RGB = [190, 170, 224]; // limite entre deux régions
+const FOG_RGB = [27, 11, 61];       // brouillard de guerre, en équipes
 
 function createMinimap(canvas) {
   const ctx = canvas.getContext('2d');
@@ -30,7 +31,7 @@ function createMinimap(canvas) {
     image = ctx.createImageData(size, size);
   }
 
-  function paintTerritories(game) {
+  function paintTerritories(game, vision) {
     const { grid, lands } = game;
     fitTo(grid);
     const middle = Math.floor(grid.resolution / 2);
@@ -47,9 +48,11 @@ function createMinimap(canvas) {
         const onBorder = owner === 0 && region !== 0 && x + 1 < size && y + 1 < size &&
           ((grid.regionOf[index + grid.resolution] || region) !== region || (grid.regionOf[index + grid.resolution * grid.size] || region) !== region);
         const [red, green, blue] = owner !== 0 ? toRgb(lands[owner - 1].colors.main) : onBorder ? BORDER_RGB : LAND_RGB;
-        image.data[pixel] = red;
-        image.data[pixel + 1] = green;
-        image.data[pixel + 2] = blue;
+        // Hors de vue : la dernière couleur connue, assombrie.
+        const veil = vision && !vision.visible[y * size + x] ? (vision.seen[y * size + x] ? 0.55 : 0.8) : 0;
+        image.data[pixel] = red + (FOG_RGB[0] - red) * veil;
+        image.data[pixel + 1] = green + (FOG_RGB[1] - green) * veil;
+        image.data[pixel + 2] = blue + (FOG_RGB[2] - blue) * veil;
         image.data[pixel + 3] = 255;
       }
     }
@@ -76,12 +79,12 @@ function createMinimap(canvas) {
   }
 
   /* Repeinte quatre fois par seconde, et aussitôt que la caméra pivote. */
-  function update(game, dt, yaw) {
+  function update(game, dt, yaw, vision = null) {
     wait -= dt;
     if (wait > 0 && Math.abs(angleDifference(paintedYaw, yaw)) < 0.03) return;
     wait = MINIMAP_REFRESH;
     paintedYaw = yaw;
-    paintTerritories(game);
+    paintTerritories(game, vision);
     if (game.player && game.player.alive) paintPlayer(game.player, yaw);
   }
 

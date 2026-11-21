@@ -14,9 +14,13 @@
   });
   const canvas = document.getElementById('arena');
   const renderer = createRenderer(canvas);
+  const space = createSpace(document.getElementById('space'));
+  let theme = applyTheme(loadThemeKey());
+  renderer.setTheme(theme);
+  space.setTheme(theme);
   const minimap = createMinimap(document.getElementById('minimap'));
   const speech = createSpeech();
-  const ABILITY_ACTIONS = { boost: useBoost, bomb: useBomb };   // le dash se vise : voir startAim
+  const ABILITY_ACTIONS = { boost: useBoost, bomb: useBomb, radar: useRadar, scout: useScout };   // le dash se vise : voir startAim
   /* Options du joueur : contrôle 'auto' (le cube avance toujours) ou
      'manual' (il n'avance que si on le dirige) ; traînée 'vulnerable' ou
      'safe' (personne ne peut la couper). */
@@ -35,6 +39,7 @@
       share: shareRoom,
       rename: renameOnline,
       pickTeam: pickOnlineTeam,
+      setMatch: setOnlineMatch,
       start: startOnlineMatch,
       leave: leaveOnline,
     },
@@ -46,6 +51,9 @@
     onMenu: () => (online ? leaveOnline() : showMenu()),
     onAbility: useAbility,
     onResetCamera: renderer.resetYaw,
+    onTheme: toggleTheme,
+    onCamera: toggleCamera,
+    onScoreboard: setScoreboard,
     pause: {
       open: pauseGame,
       resume: resumeGame,
@@ -76,6 +84,10 @@
   let teamSettings = null;      // réglages de la partie en équipes en cours
   let primaryAction = () => {}; // ce que fait le bouton principal de l'écran de fin
   let lastTime = performance.now();
+  /* Brouillard du camp de cet appareil, en équipes (voir vision.js), ou
+     null. La partie est alors affichée telle que ce camp la connaît. */
+  let vision = null;
+  let cameraPan = null;         // caméra libre au clavier : direction tenue (à l'écran), ou null
   /* Partie en ligne en cours (salon compris), ou null :
      { role: 'host' | 'guest', code, me, lobby, net, sync, clock, status, tone, lastSteer }. */
   let online = null;
@@ -126,6 +138,7 @@
   /* Derrière l'accueil, les adversaires jouent seuls. */
   function showMenu() {
     game = createGame({ mode: 'demo' });
+    vision = null;
     paused = false;
     aim = null;
     renderer.reset(game);
@@ -144,12 +157,15 @@
 
   function startGame(options, gameBadge, announcement) {
     game = createGame({ ...options, safeTrail: settings.trail === 'safe' });
+    vision = hasFog(game) ? createVision(game, game.player.landId) : null;
+    if (vision) updateVision(vision, game, 0, true);
     screen = 'playing';
     paused = false;
     aim = null;
     wasDashing = false;
+    cameraPan = null;
     badge = gameBadge;
-    renderer.reset(game);
+    renderer.reset(displayed());
     speech.reset();
     minimap.refreshNow();
     ui.showPlaying(game, gameBadge);
@@ -382,6 +398,39 @@
     ui.showGameOver(game, Math.max(best, isNewRecord ? share : 0), isNewRecord);
   }
 
+  /* --- Affichage --------------------------------------------------- */
+
+  /* La partie telle que l'affiche cet appareil : en équipes, avec la carte
+     connue de son camp à la place de la vraie. */
+  function displayed() {
+    return vision && !vision.shareGrid ? { ...game, grid: vision.known } : game;
+  }
+
+  function toggleTheme() {
+    theme = applyTheme(theme.key === 'night' ? 'day' : 'night');
+    renderer.setTheme(theme);
+    space.setTheme(theme);
+    ui.showTheme(theme.key);
+  }
+
+  /* Caméra libre (C ou bouton) : elle quitte le cube et se promène sur
+     l'arène ; le cube garde sa direction. Appelée de nouveau, elle revient. */
+  function toggleCamera() {
+    if (screen !== 'playing') return;
+    const free = renderer.toggleFreeCamera();
+    cameraPan = null;
+    ui.showFreeCamera(free);
+    // En contrôle manuel, les touches reprennent leur rôle : sans direction tenue, le cube s'arrête.
+    if (!free && settings.control === 'manual' && heldHeading === null) command({ type: 'steer', angle: null });
+  }
+
+  /* Classement complet : Tab tenue, ou le bouton. Renvoie vrai si la touche a servi. */
+  function setScoreboard(open) {
+    if (screen !== 'playing') return false;
+    if (ui.isScoreboardOpen() !== open) ui.setScoreboard(displayed(), open);
+    return true;
+  }
+
   /* --- Commandes ------------------------------------------------------ */
 
   /* Les commandes donnent une direction à l'écran ; la caméra pouvant
@@ -392,6 +441,11 @@
   function steer(screenAngle) {
     heldHeading = screenAngle;
     if (screen !== 'playing') return;
+    // Caméra libre : les touches de direction déplacent la caméra, pas le cube.
+    if (renderer.isFreeCamera()) {
+      cameraPan = screenAngle;
+      return;
+    }
     if (aim) {
       if (screenAngle !== null) aim.angle = renderer.toWorldAngle(screenAngle);
       return;
@@ -519,7 +573,7 @@
 
   function lobbyView() {
     return {
-      code: online.code, isHost: online.role === 'host', me: online.me,
+      code: online.code, isHost: online.role === 'host', me: online.me, match: online.lobby ? online.lobby.match : null,
       players: online.lobby ? online.lobby.players : [], status: online.status, tone: online.tone,
     };
   }
@@ -533,6 +587,7 @@
   /* Derrière le salon, comme derrière l'accueil, les IA jouent seules. */
   function showMenuGame() {
     game = createGame({ mode: 'demo' });
+    vision = null;
     paused = false;
     aim = null;
     renderer.reset(game);
@@ -560,7 +615,7 @@
     if (online) online.net && online.net.close();
     const name = defaultNickname();
     online = {
-      role: 'host', code: null, me: 'host', lobby: createLobby({ name, teamKey: TEAMS[0].key }),
+      role: 'host', code: null, me: 'host', lobby: createLobby({ name, teamKey: TEAMS[0].key }), syncs: [],
       net: null, sync: null, clock: 0, status: 'Ouverture de la partie…', tone: '', lastSteer: null,
       heard: new Map(), pingClock: 0,
     };
@@ -580,7 +635,7 @@
   }
 
   function broadcastLobby() {
-    if (online.net) online.net.broadcast({ type: 'lobby', code: online.code, players: online.lobby.players });
+    if (online.net) online.net.broadcast({ type: 'lobby', code: online.code, players: online.lobby.players, match: online.lobby.match });
     if (screen === 'lobby') ui.showLobby(lobbyView());
   }
 
@@ -619,26 +674,63 @@
     broadcastLobby();
   }
 
+  /* L'hôte règle la partie : format, carte, règles. */
+  function setOnlineMatch(patch) {
+    if (!online || online.role !== 'host') return;
+    if (lobbySetMatch(online.lobby, patch)) broadcastLobby();
+  }
+
+  /* Lancement : en équipes, chaque camp a son brouillard et reçoit ses
+     propres messages (voir createHostSync) ; en duel, tout le monde voit tout. */
   function startOnlineMatch() {
     if (!online || online.role !== 'host' || !online.code) return;
+    const { match } = online.lobby;
+    if (match.format === 'duel' && online.lobby.players.length < 2) return;
     game = createGame({
       mode: 'online',
+      format: match.format,
+      arena: matchArena(match),
       humans: online.lobby.players.map(({ peer, name, teamKey }) => ({ peer, name, teamKey })),
     });
     game.unranked = true;
-    online.sync = createHostSync(game);
     online.clock = 0;
-    online.net.broadcast(online.sync.start());
+    online.syncs = [];
+    vision = null;
+    if (hasFog(game)) {
+      for (const land of game.lands) {
+        const members = game.entities.filter((entity) => entity.landId === land.id && entity.isHuman);
+        if (members.length === 0) continue;
+        const landVision = createVision(game, land.id);
+        updateVision(landVision, game, 0, true);
+        if (land.id === game.player.landId) vision = landVision;
+        online.syncs.push({ vision: landVision, sync: createHostSync(game, landVision), peers: members.map((entity) => entity.peer).filter((peer) => peer !== 'host') });
+      }
+    } else {
+      online.syncs.push({ vision: null, sync: createHostSync(game), peers: null });
+    }
+    for (const group of online.syncs) sendToGroup(group, group.sync.start());
     beginOnlineGame();
   }
 
-  /* À intervalle régulier, l'hôte envoie à ses invités ce qui a changé. */
+  function sendToGroup(group, message) {
+    if (group.peers === null) online.net.broadcast(message);
+    else for (const peer of group.peers) online.net.send(peer, message);
+  }
+
+  /* À intervalle régulier, l'hôte envoie à ses invités ce qui a changé ;
+     en équipes, à chaque camp ce qu'il voit. */
   function sendState(dt) {
-    online.sync.collect(game.events);
+    for (const group of online.syncs) {
+      if (group.vision && group.vision !== vision) updateVision(group.vision, game, dt);
+      group.sync.collect(game.events);
+    }
     online.clock += dt;
     if (online.clock < CONFIG.online.sendInterval) return;
     online.clock = 0;
-    online.net.broadcast(online.sync.tick());
+    for (const group of online.syncs) {
+      if (group.peers && group.peers.length === 0) continue;
+      sendToGroup(group, group.sync.tick());
+    }
   }
 
   /* --- Invité --- */
@@ -691,7 +783,7 @@
     online.heardHost = performance.now();
     if (message.type === 'ping') return;
     if (message.type === 'lobby') {
-      online.lobby = { players: message.players };
+      online.lobby = { players: message.players, match: message.match };
       online.code = message.code;
       // Pendant une partie, le salon change en coulisse ; on y revient après.
       // L'hôte revenu au salon après une partie y ramène tout le monde.
@@ -704,6 +796,8 @@
       else leaveOnline(reason);
     } else if (message.type === 'start') {
       game = createMirror(message, online.me);
+      vision = message.fog && game.player ? createVision(game, game.player.landId, { shareGrid: true }) : null;
+      if (vision) updateVision(vision, game, 0, true);
       online.lastSteer = null;
       beginOnlineGame();
     } else if (message.type === 'state' && game.mirror) {
@@ -763,12 +857,13 @@
     paused = false;
     aim = null;
     wasDashing = false;
-    badge = `En ligne · ${online.code}`;
-    renderer.reset(game);
+    badge = `${game.format === 'duel' ? '1v1' : 'En ligne'} · ${online.code}`;
+    cameraPan = null;
+    renderer.reset(displayed());
     speech.reset();
     minimap.refreshNow();
     ui.showPlaying(game, badge);
-    ui.announce('51 % de la France et ton camp l\'emporte !');
+    ui.announce(game.format === 'duel' ? '1v1 : 51 % de l\'arène et c\'est gagné !' : '51 % de la carte et ton camp l\'emporte !');
     canvas.focus({ preventScroll: true });
     requestWakeLock();
   }
@@ -834,8 +929,11 @@
 
     if (game.mirror) updateMirror(game, dt);
     else if (!paused) updateGame(game, dt);
+    if (vision) updateVision(vision, game, paused ? 0 : dt);
     if (online && online.role === 'host' && game.mode === 'online') sendState(dt);
     keepAlive(dt);
+    if (cameraPan !== null && screen === 'playing') renderer.panToward(cameraPan, dt);
+    const view = displayed();
     if (screen === 'playing') {
       touchInput.update();
       settleAfterDash();
@@ -843,18 +941,19 @@
     } else {
       aim = null;
     }
-    renderer.handleEvents(game);
+    renderer.handleEvents(view);
     if (screen === 'playing') {
-      ui.handleEvents(game);
+      ui.handleEvents(view);
       speech.handleEvents(game);
       speech.update(game, dt);
     }
     game.events.length = 0;
-    renderer.draw(game, paused ? 0 : dt, screen === 'playing' ? speech.bubbles : null, aim);
+    renderer.draw(view, paused ? 0 : dt, screen === 'playing' ? speech.bubbles : null, aim, vision);
+    space.update(dt, { yaw: renderer.getYaw(), pitch: renderer.getPitch() });
 
     if (screen === 'playing') {
-      minimap.update(game, dt, renderer.getYaw());
-      ui.updateHud(game, loadRecordCached());
+      minimap.update(view, dt, renderer.getYaw(), vision);
+      ui.updateHud(view, loadRecordCached(), dt, vision);
       ui.updateCompass(renderer.getYaw());
       if (game.over) endGame();
     }
@@ -868,7 +967,10 @@
     return cachedRecord.value;
   }
 
-  setupKeyboard({ onHeading: steer, onConfirm: confirm, onAbility: useAbility, onAbilityEnd: endAbility, onHalt: halt, onPause: togglePause });
+  setupKeyboard({
+    onHeading: steer, onConfirm: confirm, onAbility: useAbility, onAbilityEnd: endAbility, onHalt: halt, onPause: togglePause,
+    onCamera: toggleCamera, onScoreboard: setScoreboard,
+  });
   const touchInput = setupTouch(canvas, {
     onHeading: steer,
     onDoubleTap: halt,
@@ -877,10 +979,17 @@
     onZoom: renderer.zoomBy,
     onTilt: renderer.tiltBy,
     onRotate: renderer.rotateBy,
+    isPanning: () => screen === 'playing' && renderer.isFreeCamera(),
+    onPan: renderer.panBy,
   });
   ui.applySettings(settings);
-  window.addEventListener('resize', renderer.resize);
-  window.addEventListener('orientationchange', renderer.resize);
+  ui.showTheme(theme.key);
+  const resizeAll = () => {
+    renderer.resize();
+    space.resize();
+  };
+  window.addEventListener('resize', resizeAll);
+  window.addEventListener('orientationchange', resizeAll);
   showMenu();
   // Lien d'invitation : on ouvre directement « Rejoindre », code rempli.
   const invitation = location.hash.match(/rejoindre=([A-Za-z]+)/);

@@ -146,6 +146,15 @@ function setUpOnlineGame(game, humans) {
   }
 }
 
+/* Duel en ligne : deux camps d'un seul joueur, l'hôte et son invité,
+   sans IA. `humans` : [{ peer, name }], l'hôte en premier. */
+function setUpDuelGame(game, humans) {
+  humans.slice(0, 2).forEach((human, index) => {
+    const land = createLand(game, human.name, DUEL_COLORS[index], `p${index + 1}`);
+    createEntity(game, land, human.name, human.peer === 'host', true, human.peer);
+  });
+}
+
 /* En ligne : un invité parti laisse son joueur à une IA. */
 function handOverToBot(entity) {
   entity.isHuman = false;
@@ -155,7 +164,7 @@ function handOverToBot(entity) {
 
 /* Équipes, en local comme en ligne : trois camps, carte de France, renforts. */
 function isTeamMode(game) {
-  return game.mode === 'team' || game.mode === 'online';
+  return game.mode === 'team' || (game.mode === 'online' && game.format !== 'duel');
 }
 
 /* Premier nom de rôle encore libre dans ce camp. */
@@ -198,12 +207,14 @@ function maybeRecruit(game, landId, gainedCells) {
    dure jusqu'à ce qu'un camp atteigne 51 %. */
 function createGame({
   mode, teamKey = null, safeTrail = false, arena = null, round = 1, opponentKey = null,
-  level = 0, identity = null, difficulty = 'chaud', humans = [],
+  level = 0, identity = null, difficulty = 'chaud', humans = [], format = 'teams',
 }) {
   const levelInfo = mode === 'solo' ? CAMPAIGN.levels[level] : null;
   arena = arena || (levelInfo ? levelInfo.arena : CONFIG.arenas[mode === 'online' ? 'team' : mode]);
   const game = {
     mode,
+    format: mode === 'online' ? format : null,   // en ligne : 'teams' (trois camps) ou 'duel' (1v1)
+    arenaInfo: arena,      // forme et taille de l'arène, pour les invités en ligne
     round,
     level,
     difficulty,
@@ -214,13 +225,17 @@ function createGame({
     entities: [],
     player: null,
     projectiles: [],       // bombes en vol
+    reveals: [],           // radars et éclaireurs en cours (voir vision.js)
+    stats: createStats(),  // K / D / A et taux par seconde (voir stats.js)
     events: [],
     startCells: 0,         // taille du territoire initial du joueur, en cases
     ending: null,          // bilan de la partie, une fois perdue ou gagnée (voir endGameFor)
     over: false,
   };
 
-  if (mode === 'online') {
+  if (mode === 'online' && format === 'duel') {
+    setUpDuelGame(game, humans);
+  } else if (mode === 'online') {
     setUpOnlineGame(game, humans);
   } else if (mode === 'team') {
     setUpTeamGame(game, teamKey, round === 2 ? [teamKey, opponentKey] : TEAMS.map((team) => team.key));
@@ -276,6 +291,7 @@ function spawnEntity(game, entity, clearance) {
     spot = findSpawnPoint(grid, occupied, radius, clearance);
     if (!spot) return false;
     const cells = claimDisc(grid, spot.x, spot.y, radius, entity.landId);
+    if (grid.stolen) grid.stolen.clear();   // une apparition n'est la faute de personne
     game.events.push({ type: 'capture', landId: entity.landId, entity: null, cells });
   }
 
@@ -346,6 +362,7 @@ function updateGame(game, dt) {
   }
   const steps = Math.max(1, Math.ceil(fastest * dt / CONFIG.maxStepDistance));
   for (let step = 0; step < steps; step++) stepGame(game, dt / steps);
+  tickStats(game, dt);
 }
 
 function stepGame(game, dt) {
@@ -356,6 +373,7 @@ function stepGame(game, dt) {
     moveEntity(game, entity, dt);
   }
   updateProjectiles(game, dt);
+  tickReveals(game, dt);
   resolveHeadOnCollisions(game);
   for (const entity of game.entities) {
     if (entity.alive) resolvePosition(game, entity);
@@ -577,6 +595,7 @@ function settleCapture(game, entity, gainedCells) {
     game.events.push({ type: 'region', landId: entity.landId, name: region.name });
     game.events.push({ type: 'capture', landId: entity.landId, entity, cells: region.cells });
   }
+  noteSteals(game, entity);
   eliminateLandless(game, entity);
   maybeRecruit(game, entity.landId, gained);
   checkVictory(game, entity.landId);
@@ -604,6 +623,7 @@ function killEntity(game, victim, killer, reason) {
   if (!victim.alive) return;
   const cellsOwned = game.grid.counts[victim.landId];
   if (killer && !areAllies(killer, victim)) grantKill(killer);
+  recordDeath(game, victim, killer);
   // Le bilan est dressé avant que le territoire du joueur ne soit libéré.
   // En campagne Normal, le joueur réapparaît : la partie continue.
   if (victim === game.player && !playerRespawns(game)) {

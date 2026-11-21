@@ -15,15 +15,16 @@ const KEY_VECTORS = Object.freeze({
   ArrowLeft: [-1, 0], KeyA: [-1, 0],
 });
 
-const KEY_ABILITIES = Object.freeze({ Space: 'boost', KeyE: 'dash', KeyR: 'bomb' });
+const KEY_ABILITIES = Object.freeze({ Space: 'boost', KeyE: 'dash', KeyR: 'bomb', KeyV: 'radar', KeyB: 'scout' });
 
 /* Durées et distances d'un tap, pour reconnaître le double tap (ou double clic). */
 const TAP = Object.freeze({ maxDuration: 250, maxGap: 320, maxSpread: 40 });
 
 /* Les touches enfoncées s'additionnent : haut + droite donne la diagonale.
    Une compétence part à l'appui ; `onAbilityEnd` signale qu'on la relâche
-   (le dash se vise touche enfoncée et part au relâchement). F : s'arrêter. */
-function setupKeyboard({ onHeading, onConfirm, onAbility, onAbilityEnd, onHalt, onPause }) {
+   (le dash se vise touche enfoncée et part au relâchement). F : s'arrêter.
+   C : caméra libre. Tab : classement complet, tant qu'on la tient. */
+function setupKeyboard({ onHeading, onConfirm, onAbility, onAbilityEnd, onHalt, onPause, onCamera, onScoreboard }) {
   const heldKeys = new Set();
 
   const applyHeldKeys = () => {
@@ -44,6 +45,10 @@ function setupKeyboard({ onHeading, onConfirm, onAbility, onAbilityEnd, onHalt, 
       if (!event.repeat && onPause()) event.preventDefault();
       return;
     }
+    if (event.code === 'Tab') {
+      if (onScoreboard(true)) event.preventDefault();
+      return;
+    }
     if (KEY_VECTORS[event.code]) {
       event.preventDefault();
       if (event.repeat) return;
@@ -62,9 +67,12 @@ function setupKeyboard({ onHeading, onConfirm, onAbility, onAbilityEnd, onHalt, 
       onAbility(KEY_ABILITIES[event.code]);
     } else if (event.code === 'KeyF') {
       onHalt();
+    } else if (event.code === 'KeyC') {
+      onCamera();
     }
   });
   window.addEventListener('keyup', (event) => {
+    if (event.code === 'Tab') onScoreboard(false);
     if (heldKeys.delete(event.code)) applyHeldKeys();
     else if (KEY_ABILITIES[event.code]) onAbilityEnd(KEY_ABILITIES[event.code]);
   });
@@ -74,6 +82,7 @@ function setupKeyboard({ onHeading, onConfirm, onAbility, onAbilityEnd, onHalt, 
       onHeading(null);
     }
     onAbilityEnd('dash');
+    onScoreboard(false);
   });
 }
 
@@ -87,8 +96,10 @@ function setupKeyboard({ onHeading, onConfirm, onAbility, onAbilityEnd, onHalt, 
    le cube vers la souris : `pointTo()` donne sa position à l'écran.
    Deux taps rapides au même endroit (ou un double clic) : `onDoubleTap`.
    Renvoie `update()`, à appeler à chaque image : le cap vers la souris suit
-   le cube qui se déplace. */
-function setupTouch(surface, { onHeading, onDoubleTap, followsMouse, pointTo, onZoom, onTilt, onRotate }) {
+   le cube qui se déplace.
+   Caméra libre (`isPanning()` vrai) : un doigt, ou le clic gauche,
+   fait glisser l'arène (`onPan(dx, dy)`, en pixels). */
+function setupTouch(surface, { onHeading, onDoubleTap, followsMouse, pointTo, onZoom, onTilt, onRotate, isPanning, onPan }) {
   const { deadZone, leash, tiltPerPixel, twistThreshold, rotatePerPixel } = CONFIG.touch;
   const touches = new Map();    // doigts posés : identifiant -> position
   let steeringPointer = null;   // le doigt qui pilote, tant qu'il est seul
@@ -98,6 +109,7 @@ function setupTouch(surface, { onHeading, onDoubleTap, followsMouse, pointTo, on
   let cameraDrag = null;        // clic droit maintenu, sur ordinateur
   let mouseSteer = null;        // clic gauche maintenu en contrôle manuel : position de la souris
   let lastTap = null;           // dernier tap : moment et position
+  let panPointer = null;        // caméra libre : le doigt (ou le clic) qui fait glisser l'arène
 
   const twoFingers = () => {
     const [first, second] = [...touches.values()];
@@ -119,6 +131,10 @@ function setupTouch(surface, { onHeading, onDoubleTap, followsMouse, pointTo, on
     touches.set(event.pointerId, {
       x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, startTime: event.timeStamp,
     });
+    if (touches.size === 1 && isPanning()) {
+      panPointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      return;
+    }
     if (event.pointerType === 'mouse' && followsMouse()) {
       mouseSteer = { id: event.pointerId, x: event.clientX, y: event.clientY };
       steerToMouse();
@@ -210,7 +226,17 @@ function setupTouch(surface, { onHeading, onDoubleTap, followsMouse, pointTo, on
     if (!touch) return;
     touch.x = event.clientX;
     touch.y = event.clientY;
-    if (touches.size === 2) adjustCamera();
+    if (panPointer && event.pointerId === panPointer.id && touches.size === 1) {
+      onPan(event.clientX - panPointer.x, event.clientY - panPointer.y);
+      panPointer.x = event.clientX;
+      panPointer.y = event.clientY;
+      return;
+    }
+    if (touches.size === 2) {
+      if (panPointer) panPointer = null;
+      if (!pinch) pinch = { ...twoFingers(), twist: 0, rotating: false };
+      adjustCamera();
+    }
     else if (event.pointerId === steeringPointer) steer(event);
   });
 
@@ -220,6 +246,7 @@ function setupTouch(surface, { onHeading, onDoubleTap, followsMouse, pointTo, on
     if (touch && touches.size === 1 && !pinch && event.type === 'pointerup') checkTap(touch, event);
     touches.delete(event.pointerId);
     if (touches.size < 2) pinch = null;
+    if (panPointer && event.pointerId === panPointer.id) panPointer = null;
     if (mouseSteer && event.pointerId === mouseSteer.id) {
       mouseSteer = null;
       onHeading(null);

@@ -5,14 +5,14 @@
    le territoire et à décider des captures et des collisions.
    Aucune dépendance au DOM : ce fichier se teste hors navigateur. */
 
-function createGrid(arenaSize, resolution, { outline = null, regions = [], zoneKind = null } = {}) {
+function createGrid(arenaSize, resolution, { outlines = null, union = false, regions = [], zoneKind = null } = {}) {
   const size = arenaSize * resolution;
   const playable = new Uint8Array(size * size);
   let playableCount = 0;
   for (let index = 0; index < playable.length; index++) {
     const x = (index % size + 0.5) / resolution;
     const y = (Math.floor(index / size) + 0.5) / resolution;
-    if (!outline || isInsideOutline(outline, x, y)) {
+    if (isInsideShape({ outlines, union }, x, y)) {
       playable[index] = 1;
       playableCount++;
     }
@@ -29,7 +29,8 @@ function createGrid(arenaSize, resolution, { outline = null, regions = [], zoneK
       points: region.points,
       cells: regionOf.reduce((count, id) => count + (id === index + 1 ? 1 : 0), 0),
     })),
-    outline,                                     // contour de l'arène, ou null si elle est carrée
+    outlines,                                    // boucles du contour de l'arène, ou null si elle est carrée
+    union,                                       // boucles additionnées (îles) plutôt qu'en pair-impair
     playable,                                    // 1 = case jouable, 0 = hors de l'arène
     playableCount,                               // surface de l'arène, en cases : le 100 % des pourcentages
     owner: new Uint8Array(size * size),          // identifiant du propriétaire, 0 = libre
@@ -37,6 +38,7 @@ function createGrid(arenaSize, resolution, { outline = null, regions = [], zoneK
     trailStamp: new Float32Array(size * size),   // distance parcourue par l'auteur au moment du tracé
     counts: new Int32Array(256),                 // nombre de cases possédées par identifiant
     dirty: new Set(),                            // joueurs dont le territoire a changé depuis le dernier rendu
+    stolen: new Map(),                           // camp -> cases que d'autres lui ont prises, depuis le dernier relevé
   };
 }
 
@@ -152,6 +154,7 @@ function setOwner(grid, index, id) {
   grid.counts[previous]--;
   grid.counts[id]++;
   grid.owner[index] = id;
+  if (previous !== 0 && id !== 0 && grid.stolen) grid.stolen.set(previous, (grid.stolen.get(previous) || 0) + 1);
   grid.dirty.add(previous);
   grid.dirty.add(id);
 }

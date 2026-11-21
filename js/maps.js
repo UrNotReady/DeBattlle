@@ -133,19 +133,143 @@ function buildRoundZones(arenaSize, kind) {
   return zones.map((points) => ({ name: pool.splice(Math.floor(random() * pool.length), 1)[0], points }));
 }
 
+/* Cercle de `radius` autour de (centerX, centerY), en `sides` segments. */
+function buildCircle(centerX, centerY, radius, sides = 64, wobble = null) {
+  const loop = [];
+  for (let side = 0; side < sides; side++) {
+    const angle = (side / sides) * Math.PI * 2;
+    const distance = radius * (wobble ? 1 + wobble(angle) : 1);
+    loop.push(centerX + Math.cos(angle) * distance, centerY + Math.sin(angle) * distance);
+  }
+  return loop;
+}
+
+/* Anneau : un disque percé d'un trou au centre, qu'il faut contourner. */
+function buildRingOutlines(arenaSize) {
+  const center = arenaSize / 2;
+  return [buildCircle(center, center, arenaSize / 2 - 1, 96), buildCircle(center, center, arenaSize * 0.17, 48)];
+}
+
+/* Archipel : une grande île centrale et quatre îles plus petites, aux
+   bords qui ondulent, reliées à l'île centrale par des ponts. Ce n'est
+   qu'un contour : toutes les boucles se combinent en pair-impair, et les
+   ponts recouvrent l'eau entre deux îles. */
+function buildArchipelOutlines(arenaSize) {
+  const center = arenaSize / 2;
+  const random = seededRandom(arenaSize * 977);
+  const islands = [{ x: center, y: center, radius: arenaSize * 0.2 }];
+  const turn = random() * Math.PI * 2;
+  for (let index = 0; index < 4; index++) {
+    const angle = turn + index * Math.PI / 2;
+    islands.push({ x: center + Math.cos(angle) * arenaSize * 0.33, y: center + Math.sin(angle) * arenaSize * 0.33, radius: arenaSize * 0.14 });
+  }
+  const loops = islands.map((island) => {
+    const phase = random() * Math.PI * 2;
+    return buildCircle(island.x, island.y, island.radius, 56, (angle) => 0.08 * Math.sin(angle * 3 + phase) + 0.04 * Math.sin(angle * 5 - phase));
+  });
+  // Les ponts : des rubans de 4 unités de large, de l'île centrale à chaque autre île.
+  const half = 2;
+  for (const island of islands.slice(1)) {
+    const dx = island.x - center;
+    const dy = island.y - center;
+    const length = Math.hypot(dx, dy);
+    const ux = dx / length;
+    const uy = dy / length;
+    const from = islands[0].radius * 0.8;
+    const to = length - island.radius * 0.8;
+    loops.push([
+      center + ux * from - uy * half, center + uy * from + ux * half,
+      center + ux * to - uy * half, center + uy * to + ux * half,
+      center + ux * to + uy * half, center + uy * to - ux * half,
+      center + ux * from + uy * half, center + uy * from - ux * half,
+    ]);
+  }
+  return { loops: loops.map(orientLoop), union: true };
+}
+
+/* Même sens de parcours pour toutes les boucles d'une union : remplies
+   ensemble (règle non nulle), elles s'additionnent sans trou. */
+function orientLoop(loop) {
+  let area = 0;
+  const count = loop.length / 2;
+  for (let i = 0, j = count - 1; i < count; j = i++) area += (loop[j * 2] - loop[i * 2]) * (loop[j * 2 + 1] + loop[i * 2 + 1]);
+  if (area >= 0) return loop;
+  const reversed = [];
+  for (let i = count - 1; i >= 0; i--) reversed.push(loop[i * 2], loop[i * 2 + 1]);
+  return reversed;
+}
+
+/* Découpage d'une arène quelconque en `count` zones : des germes tirés au
+   sort dans la partie jouable, assez éloignés les uns des autres ; une
+   case appartient à la zone du germe le plus proche. */
+function buildSeededZones(arenaSize, kind, isInside) {
+  const { count, names } = ZONE_KINDS[kind];
+  const random = seededRandom(arenaSize * 313 + count * 11);
+  const seeds = [];
+  let spacing = arenaSize * 0.3;
+  for (let tries = 0; seeds.length < count && tries < 4000; tries++) {
+    if (tries % 400 === 399) spacing *= 0.85;
+    const x = 2 + random() * (arenaSize - 4);
+    const y = 2 + random() * (arenaSize - 4);
+    if (!isInside(x, y) || seeds.some(([sx, sy]) => Math.hypot(sx - x, sy - y) < spacing)) continue;
+    seeds.push([x, y]);
+  }
+  const pool = [...names];
+  return seeds.map((point) => ({ name: pool.splice(Math.floor(random() * pool.length), 1)[0], points: [point] }));
+}
+
 /* Formes disponibles : chacune reçoit la taille de l'arène et sa
-   description (CONFIG.arenas, CAMPAIGN.levels). `outline` null : toute
-   l'arène carrée est jouable. `regions` vide : pas de découpage ;
-   `zoneKind` : clé de ZONE_KINDS. */
+   description (CONFIG.arenas, CAMPAIGN.levels, CONFIG.maps).
+   `outlines` : boucles du contour, combinées en pair-impair (un trou est
+   une boucle dans une autre) ; `union` : les boucles s'additionnent (îles
+   et ponts) ; null : toute l'arène carrée est jouable. `regions` vide :
+   pas de découpage ; `zoneKind` : clé de ZONE_KINDS. `zones: false`
+   retire le découpage d'une carte qui en a un (la France, en règles Normal). */
 const ARENA_SHAPES = Object.freeze({
   round: (arenaSize, arena = {}) => ({
-    outline: buildRoundOutline(arenaSize),
+    outlines: [buildRoundOutline(arenaSize)],
     regions: arena.zones ? buildRoundZones(arenaSize, arena.zones) : [],
     zoneKind: arena.zones || null,
   }),
-  france: (arenaSize) => ({ outline: buildFranceOutline(arenaSize), regions: buildFranceRegions(arenaSize), zoneKind: 'region' }),
-  square: () => ({ outline: null, regions: [], zoneKind: null }),
+  france: (arenaSize, arena = {}) => (arena.zones === false
+    ? { outlines: [buildFranceOutline(arenaSize)], regions: [], zoneKind: null }
+    : { outlines: [buildFranceOutline(arenaSize)], regions: buildFranceRegions(arenaSize), zoneKind: 'region' }),
+  square: (arenaSize, arena = {}) => ({
+    outlines: null,
+    regions: arena.zones ? buildSeededZones(arenaSize, arena.zones, () => true) : [],
+    zoneKind: arena.zones || null,
+  }),
+  ring: (arenaSize, arena = {}) => {
+    const outlines = buildRingOutlines(arenaSize);
+    return {
+      outlines,
+      regions: arena.zones ? buildSeededZones(arenaSize, arena.zones, (x, y) => isInsideOutlines(outlines, x, y)) : [],
+      zoneKind: arena.zones || null,
+    };
+  },
+  archipel: (arenaSize, arena = {}) => {
+    const { loops } = buildArchipelOutlines(arenaSize);
+    const shape = { outlines: loops, union: true };
+    return {
+      ...shape,
+      regions: arena.zones ? buildSeededZones(arenaSize, arena.zones, (x, y) => isInsideShape(shape, x, y)) : [],
+      zoneKind: arena.zones || null,
+    };
+  },
 });
+
+/* Point dans l'arène : pair-impair sur toutes les boucles, ou dans l'une
+   d'elles au moins (`union`). */
+function isInsideOutlines(outlines, x, y) {
+  let inside = false;
+  for (const outline of outlines) if (isInsideOutline(outline, x, y)) inside = !inside;
+  return inside;
+}
+
+function isInsideShape({ outlines, union = false }, x, y) {
+  if (!outlines) return true;
+  return union ? outlines.some((outline) => isInsideOutline(outline, x, y)) : isInsideOutlines(outlines, x, y);
+}
 
 function isInsideOutline(outline, x, y) {
   let inside = false;

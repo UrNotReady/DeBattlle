@@ -11,7 +11,7 @@
 
 const RENDER = Object.freeze({
   slabHeight: 0.85,       // épaisseur des blocs de territoire, en unités
-  cliffHeight: 1.3,       // hauteur de la falaise au bord de l'arène
+  platformDepth: 4.5,     // épaisseur du plateau qui flotte dans le vide, en unités
   lightDirection: Object.freeze({ x: 0.99, y: 0.15 }),   // la lumière vient de la droite
   wallTones: 5,           // nombre de nuances d'un flanc, de l'ombre à la lumière
   wallOverlap: 0.06,      // les flancs montent un peu sous le dessus, pour un bloc sans joint
@@ -42,6 +42,11 @@ const RENDER = Object.freeze({
   }),
   shadowOffset: Object.freeze({ x: -0.35, y: 0.12 }),
   fogDepth: 0.17,         // épaisseur de la brume sous l'horizon, en fraction d'écran
+  /* Secousse de l'écran : amplitude en pixels CSS, amortie en `decay` s. */
+  shake: Object.freeze({ playerDeath: 14, playerKill: 8, nearbyDeath: 4, decay: 0.35, radius: 16 }),
+  freeCameraSpeed: 34,    // caméra libre au clavier, en unités par seconde (à zoom 1)
+  fogLift: 0.06,          // le brouillard est posé juste au-dessus des territoires
+  beacon: Object.freeze({ height: 6, width: 0.35 }),   // tour de vision : un faisceau au-dessus de la région
   cameraStiffness: 9,
   minFlashCells: 12,      // en dessous, une capture ne déclenche pas d'éclair
   minPopupShare: 0.0005,  // en dessous de 0,05 % d'arène gagnée, pas de pop-up
@@ -72,7 +77,15 @@ function createRenderer(canvas) {
   const camera = { x: 0, y: 0 };
   let territoryLoops = new Map();   // identifiant du camp -> boucles de contour [x0, y0, x1, y1, ...]
   let territoryInsets = new Map();  // identifiant du camp -> mêmes boucles, en retrait (bord bombé)
-  let arenaOutline = null;          // contour de l'arène
+  let arenaLoops = [];              // boucles du contour de l'arène
+  let arenaRule = 'evenodd';        // règle de remplissage : pair-impair (trous), ou non nulle (îles)
+  let platformNormals = [];         // normale extérieure de chaque côté du plateau, ou null (côté intérieur)
+  let theme = THEMES.night;
+  let freeCamera = null;            // caméra libre : { x, y }, ou null quand elle suit le joueur
+  let shake = 0;                    // amplitude de la secousse en cours, en pixels CSS
+  let vision = null;                // brouillard de la partie affichée (voir vision.js), ou null
+  const fog = { canvas: null, small: null, version: -1 };   // texture du brouillard, vue du dessus
+  const alignedFog = { canvas: null, yaw: null, source: null, version: -1 };
   let groundTexture = null;         // texture du sol, vue du dessus
   let groundTextureGrid = null;     // forme d'arène pour laquelle elle a été peinte
   const alignedGround = { canvas: null, yaw: null, source: null };   // la même, tournée dans l'axe de la caméra
@@ -86,11 +99,8 @@ function createRenderer(canvas) {
   let waves = [];                   // ondes de choc des dashs
   let popups = [];                  // textes brefs : « Vote +1,2 % », renfort
   let streakClock = 0;
-  let backdropStrip = null;         // ciel et eau, peints à l'avance
-  let backdropPattern = null;       // la même bande, répétée sur toute la largeur
-  let nearTintStrip = null;         // voile bleuté du premier plan
-  const cliffTones = wallTones(PALETTE.cliffShade, PALETTE.cliffLit);
-  let fogStrip = null;
+  let cliffTones = wallTones(theme.cliff.shade, theme.cliff.lit);
+  let fogStrip = null;              // brume du lointain
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -103,6 +113,7 @@ function createRenderer(canvas) {
   /* --- Caméra ------------------------------------------------------- */
 
   function cameraTarget(game) {
+    if (freeCamera) return freeCamera;
     const focus = game.player || game.entities.find((entity) => entity.alive);
     return focus && focus.alive ? focus : null;
   }
@@ -129,12 +140,21 @@ function createRenderer(canvas) {
     territoryLoops = new Map();
     territoryInsets = new Map();
     const size = game.grid.arenaSize;
-    arenaOutline = game.grid.outline || [0, 0, size, 0, size, size, 0, size];
+    arenaLoops = game.grid.outlines || [[0, 0, size, 0, size, size, 0, size]];
+    arenaRule = game.grid.union ? 'nonzero' : 'evenodd';
+    platformNormals = buildPlatformNormals(game.grid);
     // La texture ne dépend que de la forme de l'arène : on la garde d'une partie à l'autre.
     const sameShape = groundTextureGrid && groundTextureGrid.zoneKind === game.grid.zoneKind &&
-      groundTextureGrid.playableCount === game.grid.playableCount && groundTextureGrid.arenaSize === game.grid.arenaSize;
-    if (!sameShape) groundTexture = buildGroundTexture(game.grid);
+      groundTextureGrid.playableCount === game.grid.playableCount && groundTextureGrid.arenaSize === game.grid.arenaSize &&
+      groundTextureGrid.regions.length === game.grid.regions.length;
+    if (!sameShape || !groundTexture) groundTexture = buildGroundTexture(game.grid, theme.ground);
     groundTextureGrid = game.grid;
+    // Dézoom maximal : tout le plateau tient à l'écran.
+    view.setMinZoom(CAMERA.distance / (size * 1.3));
+    freeCamera = null;
+    shake = 0;
+    fog.version = -1;
+    alignedFog.version = -1;
     sparkles = buildSparkles(game.grid.arenaSize);
     flashes = [];
     fades = [];
@@ -156,7 +176,7 @@ function createRenderer(canvas) {
     }
     const target = cameraTarget(game);
     if (target) {
-      const blend = 1 - Math.exp(-dt * RENDER.cameraStiffness);
+      const blend = freeCamera ? 1 - Math.exp(-dt * 20) : 1 - Math.exp(-dt * RENDER.cameraStiffness);
       camera.x += (target.x - camera.x) * blend;
       camera.y += (target.y - camera.y) * blend;
     }
@@ -165,6 +185,86 @@ function createRenderer(canvas) {
 
   function zoomBy(factor) {
     view.zoomBy(factor);
+  }
+
+  /* --- Caméra libre --------------------------------------------------- */
+
+  /* La caméra quitte le joueur et se promène sur l'arène ; appelée de
+     nouveau, elle revient sur lui. Renvoie vrai si elle est libre. */
+  function toggleFreeCamera() {
+    freeCamera = freeCamera ? null : { x: camera.x, y: camera.y };
+    return Boolean(freeCamera);
+  }
+
+  const isFreeCamera = () => Boolean(freeCamera);
+
+  function clampFreeCamera() {
+    const size = groundTextureGrid ? groundTextureGrid.arenaSize : 100;
+    freeCamera.x = Math.max(0, Math.min(size, freeCamera.x));
+    freeCamera.y = Math.max(0, Math.min(size, freeCamera.y));
+  }
+
+  /* Glisser : le sol suit le doigt (ou la souris), de (dx, dy) pixels CSS. */
+  function panBy(dx, dy) {
+    if (!freeCamera) return;
+    const scale = view.focal / (CAMERA.distance / view.zoom) / view.dpr;   // pixels CSS par unité, au centre
+    const side = -dx / scale;
+    const ahead = dy / scale / Math.max(0.3, Math.sin(view.pitch + CAMERA.aimOffset));
+    freeCamera.x += view.rightX * side + view.forwardX * ahead;
+    freeCamera.y += view.rightY * side + view.forwardY * ahead;
+    clampFreeCamera();
+  }
+
+  /* Au clavier : la caméra file dans une direction de l'écran. */
+  function panToward(screenAngle, dt) {
+    if (!freeCamera) return;
+    const distance = RENDER.freeCameraSpeed / view.zoom * dt;
+    const worldAngle = view.screenToWorldAngle(screenAngle);
+    freeCamera.x += Math.cos(worldAngle) * distance;
+    freeCamera.y += Math.sin(worldAngle) * distance;
+    clampFreeCamera();
+  }
+
+  function addShake(amount) {
+    shake = Math.max(shake, amount);
+  }
+
+  /* --- Thème ---------------------------------------------------------- */
+
+  function setTheme(next) {
+    theme = next;
+    cliffTones = wallTones(theme.cliff.shade, theme.cliff.lit);
+    if (groundTextureGrid) groundTexture = buildGroundTexture(groundTextureGrid, theme.ground);
+    alignedGround.source = null;
+    fog.version = -1;
+    prepareBackdrop();
+  }
+
+  /* Normale extérieure de chaque côté du plateau : le côté du segment où
+     l'on sort de l'arène. Un côté qui a l'arène des deux côtés (bout d'un
+     pont dans une île) n'a pas de flanc : null. */
+  function buildPlatformNormals(grid) {
+    const shape = { outlines: grid.outlines, union: grid.union };
+    return arenaLoops.map((loop) => {
+      const count = loop.length / 2;
+      const normals = [];
+      for (let i = 0; i < count; i++) {
+        const from = (i - 1 + count) % count;
+        const dx = loop[i * 2] - loop[from * 2];
+        const dy = loop[i * 2 + 1] - loop[from * 2 + 1];
+        const length = Math.hypot(dx, dy) || 1;
+        const normalX = dy / length;
+        const normalY = -dx / length;
+        const middleX = (loop[i * 2] + loop[from * 2]) / 2;
+        const middleY = (loop[i * 2 + 1] + loop[from * 2 + 1]) / 2;
+        const probe = 0.15;
+        const ahead = isInsideShape(shape, middleX + normalX * probe, middleY + normalY * probe);
+        const behind = isInsideShape(shape, middleX - normalX * probe, middleY - normalY * probe);
+        if (ahead === behind) normals.push(null);
+        else normals.push(ahead ? { x: -normalX, y: -normalY } : { x: normalX, y: normalY });
+      }
+      return normals;
+    });
   }
 
   /* Incline la caméra. Le ciel et la brume dépendent de la hauteur de
@@ -342,14 +442,14 @@ function createRenderer(canvas) {
      réunit tous. Seuls les flancs tournés vers la caméra comptent : les
      autres finissent sous le dessus. Les calculs sont faits sans objets
      intermédiaires : cette fonction traite des milliers de segments par image. */
-  function buildWallPaths(loops, top, base) {
+  function buildWallPaths(loops, top, base, normals = null) {
     const all = new Path2D();
     const levels = [];
     for (let level = 0; level < RENDER.wallTones; level++) levels.push(new Path2D());
     const light = RENDER.lightDirection;
     const { focal, centerX, centerY, width, height } = view;
 
-    for (const xy of loops) {
+    loops.forEach((xy, loopIndex) => {
       const count = xy.length / 2;
       let fromX = 0;
       let fromY = 0;
@@ -375,11 +475,14 @@ function createRenderer(canvas) {
         const onScreen = fromVisible && toVisible &&
           Math.max(fromTopX, toTopX, fromBaseX, toBaseX) >= 0 && Math.min(fromTopX, toTopX, fromBaseX, toBaseX) <= width &&
           Math.max(fromBaseY, toBaseY) >= 0 && Math.min(fromTopY, toTopY) <= height;
-        if (step > 0 && onScreen) {
+        // Côtés du plateau : seuls ceux qui regardent vers l'extérieur et vers la caméra ont un flanc visible.
+        const outward = normals && step > 0 ? normals[loopIndex][i] : null;
+        const facing = !normals || (outward && outward.x * (view.x - toX) + outward.y * (view.y - toY) > 0);
+        if (step > 0 && onScreen && facing) {
           // Normale du flanc, choisie du côté de la caméra.
-          let normalX = toY - fromY;
-          let normalY = fromX - toX;
-          if (normalX * (view.x - fromX) + normalY * (view.y - fromY) < 0) {
+          let normalX = outward ? outward.x : toY - fromY;
+          let normalY = outward ? outward.y : fromX - toX;
+          if (!outward && normalX * (view.x - fromX) + normalY * (view.y - fromY) < 0) {
             normalX = -normalX;
             normalY = -normalY;
           }
@@ -401,7 +504,7 @@ function createRenderer(canvas) {
         fromBaseY = toBaseY;
         fromVisible = toVisible;
       }
-    }
+    });
     return { all, levels };
   }
 
@@ -499,6 +602,7 @@ function createRenderer(canvas) {
 
   function handleEvents(game) {
     for (const event of game.events) {
+      if (event.entity && event.type !== 'death' && isHidden(event.entity)) continue;
       if (event.type === 'capture') {
         announceGain(game, event);
         if (event.cells.length < RENDER.minFlashCells) continue;
@@ -518,7 +622,19 @@ function createRenderer(canvas) {
       } else if (event.type === 'death') {
         const loops = event.landReleased ? territoryLoops.get(event.landId) : null;
         if (loops) fades.push({ loops, color: event.entity.colors.main, age: 0 });
+        if (event.hidden || (vision && !isVisibleAt(vision, event.x, event.y))) continue;
+        // Impact : deux gerbes d'éclats et une onde aux couleurs de la victime.
         spawnBurst(event.x, event.y, event.entity.colors);
+        spawnBurst(event.x, event.y, event.entity.colors);
+        waves.push({ x: event.x, y: event.y, color: event.entity.colors.main, power: 0.6, age: 0 });
+        const { shake: shaking } = RENDER;
+        if (event.entity === game.player) addShake(shaking.playerDeath);
+        else if (event.killer && event.killer === game.player) {
+          addShake(shaking.playerKill);
+          addPopup(event.reason === 'cut' ? 'COUPÉ !' : 'ÉLIMINÉ !', event.x, event.y);
+        } else if (Math.hypot(event.x - camera.x, event.y - camera.y) < shaking.radius) addShake(shaking.nearbyDeath);
+      } else if (event.type === 'reveal' && game.player && event.entity === game.player) {
+        addPopup(event.kind === 'radar' ? 'RADAR' : 'ÉCLAIREUR', game.player.x, game.player.y);
       }
     }
   }
@@ -545,7 +661,7 @@ function createRenderer(canvas) {
     const emitStreaks = streakClock >= RENDER.streakEvery;
     if (emitStreaks) streakClock = 0;
     for (const entity of game.entities) {
-      if (!entity.alive) continue;
+      if (!entity.alive || isHidden(entity)) continue;
       if (isDashing(entity)) {
         particles.push({ x: entity.x, y: entity.y, velocityX: 0, velocityY: 0, size: 0.5, color: entity.colors.light, age: 0 });
       } else if (emitStreaks && entity.boostTime > 0) {
@@ -563,6 +679,8 @@ function createRenderer(canvas) {
       return items.filter((item) => item.age < duration);
     };
     waves = age(waves, RENDER.dashWave.duration);
+    shake *= Math.exp(-dt / RENDER.shake.decay);
+    if (shake < 0.3) shake = 0;
     popups = age(popups, RENDER.popup.duration);
     flashes = age(flashes, RENDER.captureFlash.duration);
     fades = age(fades, RENDER.releaseFade.duration);
@@ -739,17 +857,8 @@ function createRenderer(canvas) {
   }
 
   function prepareBackdrop() {
-    const horizon = Math.max(0, view.horizonY);
-    backdropStrip = paintStrip(view.height, (target, height) => {
-      if (horizon > 0) fillGradient(target, 0, horizon, PALETTE.skyTop, PALETTE.skyHorizon);
-      fillGradient(target, horizon, height, PALETTE.outsideFar, PALETTE.outsideNear);
-    });
-    backdropPattern = ctx.createPattern(backdropStrip, 'repeat-x');
-    nearTintStrip = paintStrip(view.height, (target, height) => {
-      fillGradient(target, horizon, height, PALETTE.nearTintClear, PALETTE.nearTint);
-    });
     fogStrip = paintStrip(view.height * RENDER.fogDepth, (target, height) => {
-      fillGradient(target, 0, height, PALETTE.fog, PALETTE.fogClear);
+      fillGradient(target, 0, height, theme.haze, theme.haze.replace(/[\d.]+\)$/, '0)'));
     });
   }
 
@@ -757,10 +866,15 @@ function createRenderer(canvas) {
      ce qui se trouve le plus loin devant elle. Refaite seulement quand la
      caméra pivote ; le centre de l'image est le centre de l'arène. */
   function alignedGroundTexture() {
-    if (alignedGround.yaw === view.yaw && alignedGround.source === groundTexture) return alignedGround.canvas;
-    const size = groundTexture.width;
+    return alignTexture(alignedGround, groundTexture);
+  }
+
+  /* Copie d'une texture vue du dessus, tournée dans l'axe de la caméra. */
+  function alignTexture(cache, source) {
+    if (cache.yaw === view.yaw && cache.source === source && cache.version === source.version) return cache.canvas;
+    const size = source.width;
     const span = Math.ceil(size * Math.SQRT2) + 2;
-    const canvas = alignedGround.canvas || document.createElement('canvas');
+    const canvas = cache.canvas || document.createElement('canvas');
     if (canvas.width !== span) {
       canvas.width = span;
       canvas.height = span;
@@ -772,8 +886,8 @@ function createRenderer(canvas) {
     target.clearRect(0, 0, span, span);
     target.setTransform(rightX, -forwardX, rightY, -forwardY,
       span / 2 - (rightX + rightY) * half, span / 2 + (forwardX + forwardY) * half);
-    target.drawImage(groundTexture, 0, 0);
-    Object.assign(alignedGround, { canvas, yaw: view.yaw, source: groundTexture });
+    target.drawImage(source, 0, 0);
+    Object.assign(cache, { canvas, yaw: view.yaw, source, version: source.version });
     return canvas;
   }
 
@@ -785,19 +899,59 @@ function createRenderer(canvas) {
      premier plan, l'eau recouvre ce qui dépasse du contour de l'arène, et
      la falaise vient border le tout. */
   function drawGround() {
+    drawProjectedTexture(alignedGroundTexture(), groundTexture.width, 0);
+    // Le plateau flotte : tout ce qui dépasse de son contour disparaît, le
+    // fond spatial apparaît ; ses flancs plongent dans le vide.
+    const surface = buildSurfacePath(arenaLoops, 0);
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.fill(surface, arenaRule);
+    ctx.restore();
+    // Les flancs passent derrière le sol déjà peint : dans un creux de la
+    // côte, le sol du premier plan cache le flanc du fond.
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    fillWalls(buildWallPaths(arenaLoops, 0, -RENDER.platformDepth, platformNormals), cliffTones);
+    ctx.restore();
+    ctx.lineWidth = Math.max(1, 1.5 * view.dpr);
+    ctx.strokeStyle = theme.rim;
+    ctx.stroke(buildRimPath());
+  }
+
+  /* Liseré du bord du plateau : seulement les côtés qui donnent sur le
+     vide (pas le bout d'un pont, caché dans une île). */
+  function buildRimPath() {
+    const path = new Path2D();
+    arenaLoops.forEach((loop, loopIndex) => {
+      const count = loop.length / 2;
+      for (let i = 0; i < count; i++) {
+        if (!platformNormals[loopIndex][i]) continue;
+        const from = (i - 1 + count) % count;
+        const start = view.toScreen(loop[from * 2], loop[from * 2 + 1], 0);
+        const end = view.toScreen(loop[i * 2], loop[i * 2 + 1], 0);
+        if (!start || !end) continue;
+        path.moveTo(start.x, start.y);
+        path.lineTo(end.x, end.y);
+      }
+    });
+    return path;
+  }
+
+  /* Recopie une texture vue du dessus (déjà tournée dans l'axe de la
+     caméra) sur le plan horizontal de hauteur `height`, bande par bande. */
+  function drawProjectedTexture(texture, sourceSize, height) {
     const band = RENDER.groundBand;
-    const texture = alignedGroundTexture();
     const span = texture.width;
     const middle = span / 2;
-    const scaleToTexture = groundTexture.width / groundTextureGrid.arenaSize;   // pixels de texture par unité
+    const scaleToTexture = sourceSize / groundTextureGrid.arenaSize;   // pixels de texture par unité
     // Position de la caméra dans le repère de la texture tournée, depuis le centre de l'arène.
     const center = groundTextureGrid.arenaSize / 2;
     const cameraSide = (view.x - center) * view.rightX + (view.y - center) * view.rightY;
     const cameraAhead = (view.x - center) * view.forwardX + (view.y - center) * view.forwardY;
     const firstRow = Math.max(0, Math.ceil(view.horizonY) + 1);
-    let far = view.groundRow(firstRow);
+    let far = view.groundRow(firstRow, height);
     for (let row = firstRow; row < view.height; row += band) {
-      const near = view.groundRow(row + band);
+      const near = view.groundRow(row + band, height);
       if (far && near) {
         // Bande du sol entre deux lignes d'écran : du plus loin (far) au plus près (near).
         const sourceTop = Math.max(0, middle - (cameraAhead + far.ahead) * scaleToTexture);
@@ -813,17 +967,138 @@ function createRenderer(canvas) {
       }
       far = near;
     }
-    ctx.drawImage(nearTintStrip, 0, 0, view.width, view.height);
-
-    const water = buildSurfacePath([arenaOutline], 0);
-    water.rect(0, 0, view.width, view.height);
-    ctx.fillStyle = backdropPattern;
-    ctx.fill(water, 'evenodd');
-    fillWalls(buildWallPaths([arenaOutline], 0, -RENDER.cliffHeight), cliffTones);
   }
 
-  /* La brume fond le lointain dans la clarté de l'horizon. */
-  function drawFog() {
+  /* --- Brouillard de guerre ------------------------------------------- */
+
+  /* Texture du brouillard, vue du dessus, une case par unité : transparente
+     là où le camp voit, voilée là où il a déjà vu (la carte y est celle de
+     sa dernière visite), presque opaque ailleurs. Agrandie avec lissage,
+     pour des bords doux. */
+  function refreshFogTexture() {
+    if (fog.version === vision.version && fog.canvas) return;
+    const size = groundTextureGrid.arenaSize;
+    if (!fog.small || fog.small.width !== size) {
+      fog.small = document.createElement('canvas');
+      fog.small.width = size;
+      fog.small.height = size;
+      fog.canvas = document.createElement('canvas');
+      fog.canvas.width = size * 4;
+      fog.canvas.height = size * 4;
+    }
+    const smallCtx = fog.small.getContext('2d');
+    const image = smallCtx.createImageData(size, size);
+    const { seen, unseen } = theme.fog;
+    for (let cell = 0; cell < size * size; cell++) {
+      if (vision.visible[cell]) continue;
+      const tone = vision.seen && vision.seen[cell] ? seen : unseen;
+      const pixel = cell * 4;
+      image.data[pixel] = tone[0];
+      image.data[pixel + 1] = tone[1];
+      image.data[pixel + 2] = tone[2];
+      image.data[pixel + 3] = Math.round(tone[3] * 255);
+    }
+    smallCtx.putImageData(image, 0, 0);
+    const bigCtx = fog.canvas.getContext('2d');
+    bigCtx.clearRect(0, 0, fog.canvas.width, fog.canvas.height);
+    bigCtx.imageSmoothingEnabled = true;
+    bigCtx.filter = 'blur(3px)';
+    bigCtx.drawImage(fog.small, 0, 0, fog.canvas.width, fog.canvas.height);
+    bigCtx.filter = 'none';
+    fog.version = vision.version;
+    fog.canvas.version = vision.version;
+  }
+
+  function drawFog(game) {
+    if (!vision) return;
+    refreshFogTexture();
+    const lift = RENDER.slabHeight + RENDER.fogLift;
+    ctx.save();
+    ctx.clip(buildSurfacePath(arenaLoops, lift), arenaRule);
+    drawProjectedTexture(alignTexture(alignedFog, fog.canvas), fog.canvas.width, lift);
+    ctx.restore();
+  }
+
+  /* Tours de vision : un faisceau monte de chaque région tenue par le camp. */
+  function drawBeacons(game) {
+    if (!vision || !game.player) return;
+    const colors = game.player.colors;
+    const { height, width } = RENDER.beacon;
+    for (const tower of vision.towers) {
+      const bottom = view.toScreen(tower.x, tower.y, RENDER.slabHeight);
+      const top = view.toScreen(tower.x, tower.y, RENDER.slabHeight + height);
+      if (!bottom || !top) continue;
+      const beam = Math.max(2, width * bottom.scale);
+      const pulse = 0.55 + 0.25 * Math.sin(clock * 3 + tower.x);
+      const gradient = ctx.createLinearGradient(0, bottom.y, 0, top.y);
+      gradient.addColorStop(0, colors.light);
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = gradient;
+      ctx.fillRect(bottom.x - beam / 2, top.y, beam, bottom.y - top.y);
+      ctx.beginPath();
+      ctx.ellipse(bottom.x, bottom.y, beam * 1.6, beam * 0.6, 0, 0, Math.PI * 2);
+      ctx.fillStyle = colors.main;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* Radars (une onde qui s'étend) et éclaireurs (un drone qui plane, et le
+     cercle qu'il révèle) du camp. */
+  function drawReveals(game) {
+    if (!game.player || !game.reveals) return;
+    const colors = game.player.colors;
+    for (const reveal of game.reveals) {
+      if (reveal.landId !== game.player.landId) continue;
+      const radius = revealRadius(reveal);
+      const fade = Math.min(1, (reveal.duration - reveal.age) / 0.6);
+      const circle = [];
+      for (let i = 0; i < 48; i++) {
+        const angle = (i / 48) * Math.PI * 2;
+        circle.push(reveal.x + Math.cos(angle) * radius, reveal.y + Math.sin(angle) * radius);
+      }
+      const path = new Path2D();
+      view.addPolygon(path, circle, RENDER.slabHeight + 0.08);
+      ctx.globalAlpha = 0.8 * fade;
+      ctx.lineWidth = Math.max(1, 2.5 * view.dpr);
+      ctx.setLineDash(reveal.kind === 'scout' ? [8 * view.dpr, 6 * view.dpr] : []);
+      ctx.strokeStyle = colors.light;
+      ctx.stroke(path);
+      ctx.setLineDash([]);
+      if (reveal.kind === 'scout') {
+        const drone = view.toScreen(reveal.x, reveal.y, RENDER.slabHeight + 2.4 + Math.sin(clock * 4) * 0.15);
+        if (drone) {
+          const size = Math.max(4, 0.45 * drone.scale);
+          ctx.globalAlpha = fade;
+          ctx.fillStyle = colors.main;
+          ctx.strokeStyle = PALETTE.ink;
+          ctx.lineWidth = Math.max(1, view.dpr * 1.5);
+          ctx.beginPath();
+          ctx.moveTo(drone.x, drone.y - size);
+          ctx.lineTo(drone.x + size, drone.y);
+          ctx.lineTo(drone.x, drone.y + size);
+          ctx.lineTo(drone.x - size, drone.y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* Un adversaire hors de vue : sa tête (et son nom) ne sont pas dessinés. */
+  function isHidden(entity) {
+    return Boolean(entity.hidden || (vision && vision.hidden.has(entity.id)));
+  }
+
+  function isTrailHidden(entity) {
+    return Boolean(entity.hidden && entity.trailPoints.length === 0) || Boolean(vision && vision.trailHidden.has(entity.id));
+  }
+
+  /* La brume fond le lointain dans le ciel. */
+  function drawHaze() {
     if (view.horizonY + fogStrip.height <= 0) return;
     ctx.drawImage(fogStrip, 0, view.horizonY, view.width, fogStrip.height);
   }
@@ -1045,7 +1320,7 @@ function createRenderer(canvas) {
   /* --- Textes -------------------------------------------------------- */
 
   function labelFont(size, weight = 600) {
-    return `${weight} ${Math.round(size * view.dpr)}px "Fredoka", "Trebuchet MS", "Segoe UI", sans-serif`;
+    return `${weight} ${Math.round(size * view.dpr)}px "Public Sans", "Inter", "Segoe UI", sans-serif`;
   }
 
   /* Texte détouré de clair, lisible sur n'importe quel territoire. */
@@ -1192,33 +1467,52 @@ function createRenderer(canvas) {
 
   /* `bubbles` : répliques en cours (voir speech.js), ou null ; `aim` :
      visée du dash en cours ({ angle }, cap en radians), ou null. */
-  function draw(game, dt, bubbles = null, aim = null) {
+  /* `fogVision` : brouillard du camp de cet appareil (voir vision.js), ou
+     null hors équipes ; la partie affichée est alors ce que le camp connaît. */
+  function draw(game, dt, bubbles = null, aim = null, fogVision = null) {
+    vision = fogVision;
     updateCamera(game, dt);
     updateEffects(game, dt);
     refreshTerritoryLoops(game.grid);
     const grid = game.grid;
-    const living = game.entities.filter((entity) => entity.alive);
+    const living = game.entities.filter((entity) => entity.alive && !isHidden(entity));
 
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, view.width, view.height);
+    if (shake > 0) {
+      const amount = shake * view.dpr;
+      ctx.setTransform(1, 0, 0, 1, (Math.random() - 0.5) * amount, (Math.random() - 0.5) * amount);
+    }
     drawGround();
     drawFades();
     const tops = drawTerritories(game);
     drawSparkles(grid);
     drawFlashes(tops);
     drawWaves();
-    for (const entity of living) drawTrail(grid, entity);
+    for (const entity of game.entities) {
+      if (entity.alive && !isTrailHidden(entity)) drawTrail(grid, entity);
+    }
     drawAim(game, aim);
     drawHeads(game, living);
     drawParticles(grid);
     drawProjectiles(game);
-    drawFog();
+    drawFog(game);
+    drawReveals(game);
+    drawBeacons(game);
+    drawHaze();
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     const labelTops = drawLabels(game, living);
     drawBubbles(bubbles, labelTops);
     drawPopups(grid);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
   resize();
-  return { resize, reset, zoomBy, tiltBy, rotateBy, resetYaw, getYaw, toWorldAngle, toCssPoint, handleEvents, draw };
+  const getPitch = () => view.pitch;
+  return {
+    resize, reset, zoomBy, tiltBy, rotateBy, resetYaw, getYaw, getPitch, toWorldAngle, toCssPoint, handleEvents, draw,
+    setTheme, toggleFreeCamera, isFreeCamera, panBy, panToward, addShake,
+  };
 }

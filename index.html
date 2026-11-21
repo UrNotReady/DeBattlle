@@ -3,14 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#2a86bf">
+  <meta name="theme-color" content="#170830">
   <title>DeBattle</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@600;800;900&amp;family=Inter:wght@400;500;600;800&amp;family=Pixelify+Sans:wght@600;700&amp;display=swap">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+  <canvas id="space" aria-hidden="true"></canvas>
   <canvas id="arena" tabindex="-1" aria-label="Arène de jeu"></canvas>
 
   <div id="hud" class="hud" hidden>
@@ -20,7 +21,7 @@
         <dl class="hud-stats">
           <div><dt>Score</dt><dd id="hud-score">0</dd></div>
           <div><dt>Record</dt><dd id="hud-best">—</dd></div>
-          <div><dt class="skull-label"><span id="hud-skull" class="skull"></span><span class="visually-hidden">Éliminations</span></dt><dd id="hud-kills">0</dd></div>
+          <div><dt><abbr title="Éliminations / morts / assists">K/D/A</abbr></dt><dd id="hud-kills">0/0/0</dd></div>
         </dl>
         <p id="hud-region" class="hud-region" hidden></p>
       </div>
@@ -28,12 +29,36 @@
         <button id="btn-pause" class="hud-pause" type="button" aria-label="Pause" title="Pause (Échap)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10M15 7v10"/></svg>
         </button>
+        <button id="btn-camera" class="hud-pause" type="button" aria-pressed="false" aria-label="Caméra libre" title="Caméra libre (C)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>
+        </button>
+        <button id="btn-scoreboard" class="hud-pause" type="button" aria-label="Classement complet" title="Classement complet (Tab)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>
+        </button>
         <span id="hud-round" class="badge" hidden></span>
         <span id="hud-safe" class="badge badge-test" hidden>Traînée protégée</span>
       </p>
     </div>
-    <ol id="ranking" class="ranking" aria-label="Classement"></ol>
+    <div class="hud-side">
+      <ol id="ranking" class="ranking" aria-label="Classement"></ol>
+      <ol id="team-progress" class="team-progress" aria-label="Progression des équipes, par seconde" hidden></ol>
+    </div>
   </div>
+
+  <ol id="killfeed" class="killfeed" aria-label="Éliminations récentes" hidden></ol>
+
+  <div id="camera-chip" class="camera-chip" hidden>
+    <span>Caméra libre · glisse ou ZQSD pour explorer, molette ou pince pour zoomer</span>
+    <button id="btn-camera-back" class="btn btn-go btn-small" type="button">Recentrer</button>
+  </div>
+
+  <section id="scoreboard" class="scoreboard" aria-labelledby="scoreboard-title" hidden>
+    <header class="scoreboard-head">
+      <h2 id="scoreboard-title">Classement</h2>
+      <button id="btn-scoreboard-close" class="btn btn-quiet btn-small" type="button">Fermer</button>
+    </header>
+    <div id="scoreboard-body" class="scoreboard-body"></div>
+  </section>
 
   <div id="abilities" class="abilities" hidden>
     <div id="charges" class="charges" role="img" aria-label="Charges"></div>
@@ -100,9 +125,9 @@
       <article class="panel mode-card">
         <header class="mode-head">
           <h2>En ligne</h2>
-          <span class="tag">Équipes · 6 humains</span>
+          <span class="tag">Équipes ou 1v1</span>
         </header>
-        <p>Joue en équipes avec tes copains, à côté ou à l'autre bout du pays. Ton appareil héberge la partie : donne le code ou envoie le lien, ils rejoignent depuis leur navigateur. Les places libres sont tenues par des IA.</p>
+        <p>Joue avec tes copains, à côté ou à l'autre bout du pays : en équipes (6 humains au plus, des IA aux places libres) ou en duel. Choisis la carte et les règles. Ton appareil héberge la partie : donne le code ou envoie le lien.</p>
         <p id="online-notice" class="mode-status" role="status" hidden></p>
         <div class="actions">
           <button id="btn-host" class="btn btn-go" type="button">Créer une partie</button>
@@ -114,12 +139,16 @@
         <div class="settings-row">
           <button id="btn-settings" class="btn btn-quiet btn-small" type="button">Options</button>
           <span id="settings-summary" class="settings-summary"></span>
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="Passer en mode Jour">
+            <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+          </button>
         </div>
         <details class="controls-help">
           <summary>Commandes</summary>
           <dl class="controls">
-            <div><dt>Clavier</dt><dd>Flèches ou ZQSD, diagonales comprises. Espace : boost, R : bombe. E : maintiens pour viser le dash, lâche pour le lancer. F ou double clic : s'arrêter (contrôle auto). Échap : pause. Molette pour zoomer, clic droit glissé pour tourner la caméra.</dd></div>
-            <div><dt>Tactile</dt><dd>Glisse le pouce : ton cube prend la direction. Tape deux fois : il s'arrête (contrôle auto). Dash : appuie sur son bouton, glisse pour viser, lâche. Deux doigts : pince pour zoomer, glisse vers le haut ou le bas pour incliner la vue, tourne-les pour faire pivoter la caméra.</dd></div>
+            <div><dt>Clavier</dt><dd>Flèches ou ZQSD, diagonales comprises. Espace : boost, R : bombe. E : maintiens pour viser le dash, lâche pour le lancer. En équipes, V : radar, B : éclaireur. F ou double clic : s'arrêter (contrôle auto). Tab : classement complet. C : caméra libre (ZQSD ou clic glissé pour explorer, C pour revenir). Échap : pause. Molette pour zoomer, clic droit glissé pour tourner la caméra.</dd></div>
+            <div><dt>Tactile</dt><dd>Glisse le pouce : ton cube prend la direction. Tape deux fois : il s'arrête (contrôle auto). Dash : appuie sur son bouton, glisse pour viser, lâche. Deux doigts : pince pour zoomer, glisse vers le haut ou le bas pour incliner la vue, tourne-les pour faire pivoter la caméra. Boutons en haut : classement complet et caméra libre (un doigt fait alors glisser la carte).</dd></div>
           </dl>
         </details>
         <p class="disclaimer">Jeu parodique. DeBattle n'est ni lié aux partis cités, ni soutenu par eux ; tous les autres noms sont inventés.</p>
@@ -186,6 +215,10 @@
         <div class="actions actions-center">
           <button id="btn-pause-settings" class="btn btn-quiet" type="button">Options</button>
           <button id="btn-pause-menu" class="btn btn-quiet" type="button">Menu principal</button>
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="Passer en mode Jour">
+            <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+          </button>
         </div>
       </article>
     </div>
@@ -233,7 +266,27 @@
           </label>
         </section>
 
-        <section class="pause-group" aria-labelledby="lobby-teams-title">
+        <section class="pause-group" aria-labelledby="lobby-match-title">
+          <h3 id="lobby-match-title" class="pause-title">Partie <span class="pause-hint">· choisie par l'hôte</span></h3>
+          <div class="difficulty difficulty-two" role="radiogroup" aria-label="Format">
+            <button type="button" role="radio" data-match="format" data-value="teams">Équipes</button>
+            <button type="button" role="radio" data-match="format" data-value="duel">1v1</button>
+          </div>
+          <div class="map-choice" role="radiogroup" aria-label="Carte">
+            <button type="button" role="radio" data-match="map" data-value="france">France</button>
+            <button type="button" role="radio" data-match="map" data-value="round">Disque</button>
+            <button type="button" role="radio" data-match="map" data-value="square">Carré</button>
+            <button type="button" role="radio" data-match="map" data-value="ring">Anneau</button>
+            <button type="button" role="radio" data-match="map" data-value="archipel">Archipel</button>
+          </div>
+          <div class="difficulty difficulty-two" role="radiogroup" aria-label="Règles">
+            <button type="button" role="radio" data-match="rules" data-value="normal">Normal</button>
+            <button type="button" role="radio" data-match="rules" data-value="zones">Zones</button>
+          </div>
+          <p id="lobby-match-note" class="difficulty-note"></p>
+        </section>
+
+        <section id="lobby-teams-group" class="pause-group" aria-labelledby="lobby-teams-title">
           <h3 id="lobby-teams-title" class="pause-title">Ton camp</h3>
           <div id="lobby-teams" class="team-buttons"></div>
         </section>
@@ -241,7 +294,7 @@
         <section class="pause-group" aria-labelledby="lobby-players-title">
           <h3 id="lobby-players-title" class="pause-title">Joueurs</h3>
           <ul id="lobby-players" class="lobby-players"></ul>
-          <p class="pause-hint">Places libres : des IA. Trois humains par camp au plus.</p>
+          <p id="lobby-players-hint" class="pause-hint">Places libres : des IA. Trois humains par camp au plus.</p>
         </section>
 
         <p id="lobby-status" class="net-status" role="status"></p>
@@ -297,7 +350,7 @@
         </div>
         <dl class="results">
           <div><dt>Score</dt><dd id="over-score"></dd></div>
-          <div><dt>Éliminations</dt><dd id="over-kills"></dd></div>
+          <div><dt><abbr title="Éliminations / morts / assists">K/D/A</abbr></dt><dd id="over-kills"></dd></div>
           <div><dt>Record</dt><dd id="over-best"></dd></div>
         </dl>
         <p id="over-record" class="badge badge-record" hidden>Nouveau record !</p>
@@ -314,6 +367,8 @@
   <script src="js/maps.js"></script>
   <script src="js/grid.js"></script>
   <script src="js/ai.js"></script>
+  <script src="js/stats.js"></script>
+  <script src="js/vision.js"></script>
   <script src="js/game.js"></script>
   <script src="js/abilities.js"></script>
   <script src="js/speech.js"></script>
@@ -323,6 +378,8 @@
   <script src="js/contour.js"></script>
   <script src="js/terrain.js"></script>
   <script src="js/ground.js"></script>
+  <script src="js/theme.js"></script>
+  <script src="js/space.js"></script>
   <script src="js/projection.js"></script>
   <script src="js/minimap.js"></script>
   <script src="js/render.js"></script>

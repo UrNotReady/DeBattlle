@@ -13,7 +13,7 @@ const GROUND = Object.freeze({
   borderStrength: 0.42,
 });
 
-function buildGroundTexture(grid) {
+function buildGroundTexture(grid, colors = GROUND) {
   const size = GROUND.textureSize;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -44,8 +44,8 @@ function buildGroundTexture(grid) {
         (regionOfPixel[here + 1] !== regionOfPixel[here] || regionOfPixel[here + size] !== regionOfPixel[here]);
       const pixel = here * 4;
       for (let channel = 0; channel < 3; channel++) {
-        let value = GROUND.shadow[channel] + (GROUND.light[channel] - GROUND.shadow[channel]) * light;
-        if (onBorder) value += (GROUND.border[channel] - value) * GROUND.borderStrength;
+        let value = colors.shadow[channel] + (colors.light[channel] - colors.shadow[channel]) * light;
+        if (onBorder) value += (colors.border[channel] - value) * colors.borderStrength;
         image.data[pixel + channel] = value;
       }
       image.data[pixel + 3] = 255;
