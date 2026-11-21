@@ -5,11 +5,17 @@
 
 const CONFIG = Object.freeze({
   /* Partie en ligne. `server` : serveur de mise en relation PeerJS ; null =
-     le service gratuit de PeerJS. `sendInterval` : secondes entre deux
+     le service gratuit de PeerJS. `stunServers` : pour trouver un chemin
+     direct entre appareils. `relayCredentialsUrl` : adresse qui fournit les
+     identifiants d'un relais (TURN), utilisé quand le chemin direct est
+     bloqué (partage de connexion, 4G…) ; null = pas de relais. Le relais
+     public de PeerJS ne répond plus : on ne s'en sert pas. `sendInterval` : secondes entre deux
      messages de l'hôte ; `smoothing` et `extrapolateMax` : lissage des
      têtes chez les invités. */
   online: Object.freeze({
     server: null,
+    stunServers: Object.freeze(['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302']),
+    relayCredentialsUrl: null,
     idPrefix: 'debattle-',
     codeLetters: 'ABCDEFGHJKMNPQRSTUVWXYZ',
     codeLength: 4,
@@ -18,7 +24,7 @@ const CONFIG = Object.freeze({
     sendInterval: 0.05,
     smoothing: 14,
     extrapolateMax: 0.2,
-    connectTimeout: 12,
+    connectTimeout: 20,
     /* Présence : chaque appareil signale qu'il est là toutes les
        `pingInterval` secondes ; sans nouvelles depuis `silenceTimeout`
        secondes, l'autre est considéré comme parti. */

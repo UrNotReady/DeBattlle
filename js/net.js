@@ -18,8 +18,31 @@ function normalizeRoomCode(text) {
   return String(text || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, CONFIG.online.codeLength);
 }
 
-function peerOptions() {
-  return { debug: 0, ...(CONFIG.online.server || {}) };
+/* Serveurs utilisés pour relier deux appareils : STUN pour le chemin
+   direct, et un relais (TURN) quand on en a configuré un. Les identifiants
+   du relais sont demandés une fois ; sans réponse, on joue sans relais. */
+let iceServersRequest = null;
+
+function loadIceServers() {
+  if (iceServersRequest) return iceServersRequest;
+  const stun = CONFIG.online.stunServers.map((urls) => ({ urls }));
+  const url = CONFIG.online.relayCredentialsUrl;
+  if (!url) {
+    iceServersRequest = Promise.resolve(stun);
+    return iceServersRequest;
+  }
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = setTimeout(() => controller && controller.abort(), 6000);
+  iceServersRequest = fetch(url, controller ? { signal: controller.signal } : {})
+    .then((response) => (response.ok ? response.json() : []))
+    .then((relays) => [...stun, ...(Array.isArray(relays) ? relays : [])])
+    .catch(() => stun)
+    .finally(() => clearTimeout(timer));
+  return iceServersRequest;
+}
+
+function peerOptions(iceServers) {
+  return { debug: 0, config: { iceServers }, ...(CONFIG.online.server || {}) };
 }
 
 /* Erreurs, dites au joueur. */
@@ -30,7 +53,7 @@ const NET_ERRORS = Object.freeze({
   'socket-error': 'Le service de mise en relation ne répond pas. Réessaie dans un instant.',
   'browser-incompatible': 'Ce navigateur ne permet pas de jouer en ligne.',
   'unsupported': 'Ce navigateur ne permet pas de jouer en ligne.',
-  timeout: 'Pas de réponse de la partie : elle est peut-être fermée, ou un réseau bloque la connexion directe (essaie le Wi-Fi ou la 4G).',
+  timeout: 'Pas de réponse de la partie : elle est peut-être fermée, ou vos réseaux empêchent les appareils de se parler directement (fréquent en partage de connexion ou en 4G). Essayez sur le même Wi-Fi.',
   full: 'La partie est complète (six joueurs).',
   started: 'La partie a déjà commencé : attends la prochaine.',
   closed: 'L\'hôte a fermé la partie.',
@@ -65,16 +88,17 @@ function openHost({ onReady, onGuest, onMessage, onGuestLeft, onError }) {
     connection.on('error', drop);
   }
 
-  function open() {
+  function open(iceServers) {
+    if (closed) return;
     const code = makeRoomCode();
-    peer = new Peer(CONFIG.online.idPrefix + code, peerOptions());
+    peer = new Peer(CONFIG.online.idPrefix + code, peerOptions(iceServers));
     peer.on('open', () => onReady(code));
     peer.on('connection', listen);
     peer.on('error', (error) => {
       // Code déjà pris par une autre partie : on en tire un autre.
       if (error.type === 'unavailable-id' && attempts++ < 3) {
         peer.destroy();
-        open();
+        loadIceServers().then(open);
         return;
       }
       if (!closed) onError(error.type);
@@ -86,7 +110,7 @@ function openHost({ onReady, onGuest, onMessage, onGuestLeft, onError }) {
     });
   }
 
-  open();
+  loadIceServers().then(open);
   return {
     send(id, message) {
       const connection = connections.get(id);
@@ -102,7 +126,7 @@ function openHost({ onReady, onGuest, onMessage, onGuestLeft, onError }) {
     },
     close() {
       closed = true;
-      peer.destroy();
+      if (peer) peer.destroy();
     },
   };
 }
@@ -114,7 +138,7 @@ function joinRoom(code, { onOpen, onMessage, onClose, onError }) {
     onError('unsupported');
     return null;
   }
-  const peer = new Peer(peerOptions());
+  let peer = null;
   let connection = null;
   let opened = false;
   let finished = false;
@@ -122,7 +146,7 @@ function joinRoom(code, { onOpen, onMessage, onClose, onError }) {
   const finish = () => {
     finished = true;
     clearTimeout(timer);
-    peer.destroy();
+    if (peer) peer.destroy();
   };
   const fail = (type) => {
     if (finished) return;
@@ -131,24 +155,28 @@ function joinRoom(code, { onOpen, onMessage, onClose, onError }) {
   };
   const timer = setTimeout(() => fail('timeout'), CONFIG.online.connectTimeout * 1000);
 
-  peer.on('open', () => {
-    connection = peer.connect(CONFIG.online.idPrefix + code, { reliable: true, serialization: 'json' });
-    connection.on('open', () => {
-      opened = true;
-      clearTimeout(timer);
-      onOpen(peer.id);
+  loadIceServers().then((iceServers) => {
+    if (finished) return;
+    peer = new Peer(peerOptions(iceServers));
+    peer.on('open', () => {
+      connection = peer.connect(CONFIG.online.idPrefix + code, { reliable: true, serialization: 'json' });
+      connection.on('open', () => {
+        opened = true;
+        clearTimeout(timer);
+        onOpen(peer.id);
+      });
+      connection.on('data', (data) => {
+        if (!finished) onMessage(data);
+      });
+      connection.on('close', () => {
+        if (!opened || finished) return;
+        finish();
+        onClose();
+      });
     });
-    connection.on('data', (data) => {
-      if (!finished) onMessage(data);
+    peer.on('error', (error) => {
+      if (!opened) fail(error.type);
     });
-    connection.on('close', () => {
-      if (!opened || finished) return;
-      finish();
-      onClose();
-    });
-  });
-  peer.on('error', (error) => {
-    if (!opened) fail(error.type);
   });
 
   return {
