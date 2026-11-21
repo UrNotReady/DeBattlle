@@ -8,14 +8,23 @@ const CONFIG = Object.freeze({
      le service gratuit de PeerJS. `stunServers` : pour trouver un chemin
      direct entre appareils. `relayCredentialsUrl` : adresse qui fournit les
      identifiants d'un relais (TURN), utilisé quand le chemin direct est
-     bloqué (partage de connexion, 4G…) ; null = pas de relais. Le relais
-     public de PeerJS ne répond plus : on ne s'en sert pas. `sendInterval` : secondes entre deux
+     bloqué (partage de connexion, 4G…) ; null = pas de relais.
+     `relayServers` : ou bien les serveurs de relais eux-mêmes, identifiants
+     compris (ici le compte Metered du projet : 500 Mo par mois gratuits,
+     coupé au-delà jusqu'au mois suivant). Le relais public de PeerJS ne
+     répond plus : on ne s'en sert pas. `sendInterval` : secondes entre deux
      messages de l'hôte ; `smoothing` et `extrapolateMax` : lissage des
      têtes chez les invités. */
   online: Object.freeze({
     server: null,
     stunServers: Object.freeze(['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302']),
     relayCredentialsUrl: null,
+    relayServers: Object.freeze([
+      'turn:global.relay.metered.ca:80',
+      'turn:global.relay.metered.ca:80?transport=tcp',
+      'turn:global.relay.metered.ca:443',
+      'turns:global.relay.metered.ca:443?transport=tcp',
+    ].map((urls) => Object.freeze({ urls, username: 'db19eadfbab9535ccc440c96', credential: 'r9ajEtHo9Vxe+Q1p' }))),
     idPrefix: 'debattle-',
     codeLetters: 'ABCDEFGHJKMNPQRSTUVWXYZ',
     codeLength: 4,

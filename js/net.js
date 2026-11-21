@@ -25,7 +25,7 @@ let iceServersRequest = null;
 
 function loadIceServers() {
   if (iceServersRequest) return iceServersRequest;
-  const stun = CONFIG.online.stunServers.map((urls) => ({ urls }));
+  const stun = [...CONFIG.online.stunServers.map((urls) => ({ urls })), ...CONFIG.online.relayServers];
   const url = CONFIG.online.relayCredentialsUrl;
   if (!url) {
     iceServersRequest = Promise.resolve(stun);
